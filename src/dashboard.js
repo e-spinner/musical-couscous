@@ -23,6 +23,10 @@ const progressCountEl = document.getElementById('dashboard-progress-count');
 const dashboardScheduleHealthEl = document.getElementById('dashboard-schedule-health');
 const showTimelineBtn = document.getElementById('show-timeline');
 const showCalendarBtn = document.getElementById('show-calendar');
+const timelineDayLabel = document.getElementById('timeline-day-label');
+const timelinePrevDayBtn = document.getElementById('timeline-prev-day');
+const timelineTodayBtn = document.getElementById('timeline-today');
+const timelineNextDayBtn = document.getElementById('timeline-next-day');
 const taskModal = document.getElementById('task-modal');
 const taskModalTitle = document.getElementById('task-modal-title');
 const openTaskModalBtn = document.getElementById('open-task-modal');
@@ -47,10 +51,54 @@ const quickTaskCognitive = document.getElementById('quick-task-cognitive');
 const quickAddFeedback = document.getElementById('quick-add-feedback');
 let forceReviewBanner = false;
 let activeTaskId = null;
+let selectedTimelineDate = createDayStart(new Date());
 
 const dateOptions = { weekday: 'long', month: 'long', day: 'numeric' };
 dateLabel.textContent = new Date().toLocaleDateString('en-US', dateOptions);
 deleteTaskBtn.classList.add('hidden');
+
+function createDayStart(input) {
+  const next = new Date(input);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function isSameDayValue(first, second) {
+  return first.getFullYear() === second.getFullYear()
+    && first.getMonth() === second.getMonth()
+    && first.getDate() === second.getDate();
+}
+
+function getTimelineBounds() {
+  const availability = deriveAvailabilityBlocks();
+  const start = createDayStart(availability.startMonday || Planner.getCurrentMonday());
+  const end = new Date(start);
+  end.setDate(end.getDate() + 13);
+  end.setHours(0, 0, 0, 0);
+  return { start, end };
+}
+
+function clampTimelineDate(date) {
+  const { start, end } = getTimelineBounds();
+  if (date < start) {
+    return start;
+  }
+  if (date > end) {
+    return end;
+  }
+  return date;
+}
+
+function updateTimelineDayLabel() {
+  const today = createDayStart(new Date());
+  const isToday = isSameDayValue(selectedTimelineDate, today);
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  }).format(selectedTimelineDate);
+  timelineDayLabel.textContent = `Timeline: ${isToday ? 'Today' : formatted}`;
+}
 
 function readSchedule() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -175,6 +223,14 @@ function updateTimelineNow() {
   const now = new Date();
   const hours = now.getHours();
   const minutes = now.getMinutes();
+  const isViewingToday = isSameDayValue(selectedTimelineDate, createDayStart(now));
+
+  if (!isViewingToday) {
+    currentTimeLine.style.display = 'none';
+    passedTimeOverlay.style.height = '0%';
+    window.__timelineScrolled = false;
+    return;
+  }
 
   if (hours >= 6 && hours <= 23) {
     const pxPos = (hours - 6) * 60 + minutes;
@@ -197,9 +253,7 @@ function updateTimelineNow() {
 }
 
 function sameDay(first, second) {
-  return first.getFullYear() === second.getFullYear()
-    && first.getMonth() === second.getMonth()
-    && first.getDate() === second.getDate();
+  return isSameDayValue(first, second);
 }
 
 function formatRange(startIso, endIso) {
@@ -415,9 +469,9 @@ function renderPulse(schedule, todaySegments) {
 
 function renderTodayTimeline(todaySegments) {
   const availability = deriveAvailabilityBlocks();
-  const today = new Date();
+  const selectedDate = createDayStart(selectedTimelineDate);
   const todayBlocked = availability.blockedBlocks
-    .filter((block) => sameDay(new Date(block.start), today))
+    .filter((block) => sameDay(new Date(block.start), selectedDate))
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
   todayBlockedBlocks.innerHTML = '';
@@ -438,7 +492,7 @@ function renderTodayTimeline(todaySegments) {
   if (!todaySegments.length) {
     todayTaskBlocks.innerHTML = `
       <div class="absolute left-4 right-4 top-8 rounded-[1.25rem] border border-dashed border-graphite/15 bg-white/80 p-4 text-sm text-graphite/55">
-        No tasks scheduled today.
+        No tasks scheduled for this day.
       </div>
     `;
     return;
@@ -588,36 +642,74 @@ function renderDashboard() {
   const scheduleData = readSchedule();
   const tasks = readTasks();
   const availability = deriveAvailabilityBlocks();
+  selectedTimelineDate = clampTimelineDate(createDayStart(selectedTimelineDate));
   const today = new Date();
+  const timelineDate = createDayStart(selectedTimelineDate);
   const scheduled = scheduleData?.schedule || [];
   const unscheduled = scheduleData?.unscheduled || [];
   const flatSegments = flattenScheduled(scheduled);
-  const todaySegments = flatSegments
-    .filter((segment) => sameDay(new Date(segment.start), today))
+  const timelineSegments = flatSegments
+    .filter((segment) => sameDay(new Date(segment.start), timelineDate))
     .sort((a, b) => new Date(a.start) - new Date(b.start));
-
-  const todayMinutes = todaySegments.reduce(
-    (sum, segment) => sum + (new Date(segment.end).getTime() - new Date(segment.start).getTime()) / 60000,
-    0
-  );
   const remainingMinutes = availability.openBlocks.reduce(
     (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
     0
   );
+
+  const actualTodaySegments = flatSegments
+    .filter((segment) => sameDay(new Date(segment.start), today))
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
 
   remainingHoursEl.textContent = `${(remainingMinutes / 60).toFixed(remainingMinutes % 60 === 0 ? 0 : 1)}h`;
   scheduledCountEl.textContent = String(scheduleData?.summary?.scheduledCount || scheduled.length);
   unscheduledCountEl.textContent = String(scheduleData?.summary?.incompleteCount || unscheduled.length);
   newCountEl.textContent = String(tasks.filter((task) => task.status === 'new').length);
   progressCountEl.textContent = String(tasks.filter((task) => task.status === 'in_progress').length);
+  dateLabel.textContent = today.toLocaleDateString('en-US', dateOptions);
+  updateTimelineDayLabel();
 
-  renderPulse(scheduleData, todaySegments);
+  renderPulse(scheduleData, actualTodaySegments);
   renderScheduleHealth(scheduleData);
-  renderTodayTimeline(todaySegments);
+  renderTodayTimeline(timelineSegments);
   renderQueue(scheduled, unscheduled, tasks);
   renderCalendar(scheduled);
-  updateReviewBanner(todaySegments.length);
+  updateReviewBanner(actualTodaySegments.length);
+  updateTimelineNow();
 }
+
+function isTypingTarget(target) {
+  return target instanceof HTMLElement
+    && (
+      target.isContentEditable
+      || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+    );
+}
+
+function shiftTimelineDay(delta) {
+  const next = createDayStart(selectedTimelineDate);
+  next.setDate(next.getDate() + delta);
+  const clamped = clampTimelineDate(next);
+  if (isSameDayValue(clamped, selectedTimelineDate)) {
+    return;
+  }
+  selectedTimelineDate = clamped;
+  window.__timelineScrolled = false;
+  renderDashboard();
+}
+
+timelinePrevDayBtn.addEventListener('click', () => {
+  shiftTimelineDay(-1);
+});
+
+timelineTodayBtn.addEventListener('click', () => {
+  selectedTimelineDate = clampTimelineDate(createDayStart(new Date()));
+  window.__timelineScrolled = false;
+  renderDashboard();
+});
+
+timelineNextDayBtn.addEventListener('click', () => {
+  shiftTimelineDay(1);
+});
 
 function updateReviewBanner(hasTodayWork) {
   const dismissed = window.sessionStorage.getItem('architectureReviewBannerDismissed') === 'true';
@@ -880,6 +972,20 @@ triggerReviewBannerBtn.addEventListener('click', () => {
   forceReviewBanner = true;
   window.sessionStorage.removeItem('architectureReviewBannerDismissed');
   renderDashboard();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (isTypingTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    shiftTimelineDay(-1);
+  }
+  if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    shiftTimelineDay(1);
+  }
 });
 
 showTimelineBtn.addEventListener('click', () => {
