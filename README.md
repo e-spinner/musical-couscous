@@ -8,3 +8,7 @@ Docs:
 - [Project Structure](./ref/PROJECT_STRUCTURE.md)
 - [Scheduler Guidelines](./ref/SCHEDULER_GUIDELINES.md)
 - [QA Checklist](./ref/ROBOTS.md)
+
+Developer note:
+
+- Hold `Shift` in the app to reveal the developer tools cluster, including `Debug Reset`, `Random Task`, and `Test Review`.

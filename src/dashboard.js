@@ -21,6 +21,7 @@ const unscheduledCountEl = document.getElementById('dashboard-unscheduled-count'
 const newCountEl = document.getElementById('dashboard-new-count');
 const progressCountEl = document.getElementById('dashboard-progress-count');
 const dashboardScheduleHealthEl = document.getElementById('dashboard-schedule-health');
+const dashboardDeveloperToolsEl = document.getElementById('dashboard-developer-tools');
 const showTimelineBtn = document.getElementById('show-timeline');
 const showCalendarBtn = document.getElementById('show-calendar');
 const timelineDayLabel = document.getElementById('timeline-day-label');
@@ -368,6 +369,7 @@ function addThirtyMinutes(date, time) {
 
 function openTaskEditor(task = null) {
   activeTaskId = task?.id || null;
+  ensureStatusOptions(quickTaskStatus, Boolean(task));
   taskModalTitle.textContent = activeTaskId ? 'Edit Task' : 'Add Task';
   quickTaskTitle.value = task?.title || '';
   quickTaskEstimate.value = String(task?.estimateMinutes || 60);
@@ -386,6 +388,30 @@ function closeTaskEditor() {
   taskModal.classList.add('hidden');
   taskModal.classList.remove('flex');
   quickAddFeedback.textContent = '';
+}
+
+function ensureStatusOptions(selectEl, includeCompleted) {
+  const completedOption = selectEl.querySelector('option[value="completed"]');
+  if (includeCompleted) {
+    if (!completedOption) {
+      const option = document.createElement('option');
+      option.value = 'completed';
+      option.textContent = 'Completed';
+      selectEl.appendChild(option);
+    }
+    return;
+  }
+  if (completedOption) {
+    completedOption.remove();
+  }
+  if (selectEl.value === 'completed') {
+    selectEl.value = 'new';
+  }
+}
+
+function setDeveloperVisibility(isVisible) {
+  dashboardDeveloperToolsEl.classList.toggle('hidden', !isVisible);
+  dashboardDeveloperToolsEl.classList.toggle('flex', isVisible);
 }
 
 function buildSchedulingTasks(taskList, previousSchedule, cutoff) {
@@ -819,6 +845,10 @@ addTaskBtn.addEventListener('click', async () => {
     quickAddFeedback.textContent = 'Add a title, estimate, and due date.';
     return;
   }
+  if (!activeTaskId && status === 'completed') {
+    quickAddFeedback.textContent = 'New tasks cannot start as completed.';
+    return;
+  }
 
   const tasks = readTasks();
   const nextTask = {
@@ -975,6 +1005,22 @@ triggerReviewBannerBtn.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Shift') {
+    setDeveloperVisibility(true);
+  }
+});
+
+document.addEventListener('keyup', (event) => {
+  if (event.key === 'Shift') {
+    setDeveloperVisibility(false);
+  }
+});
+
+window.addEventListener('blur', () => {
+  setDeveloperVisibility(false);
+});
+
+document.addEventListener('keydown', (event) => {
   if (isTypingTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey) {
     return;
   }
@@ -1004,4 +1050,5 @@ showCalendarBtn.addEventListener('click', () => {
 
 window.setInterval(updateTimelineNow, 60000);
 updateTimelineNow();
+setDeveloperVisibility(false);
 renderDashboard();

@@ -50,7 +50,12 @@
             <h2 class="mt-2 font-display text-3xl">Tasks</h2>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button id="debug-reset" class="rounded-full border border-red-200 px-4 py-2 text-sm font-semibold text-red-700">Debug Reset</button>
+            <div id="developer-tools" class="hidden items-center gap-2 rounded-full border border-dashed border-graphite/15 bg-cream/70 px-3 py-2">
+              <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-graphite/45">Developer</span>
+              <button id="debug-export-bundle" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold text-graphite/70">Export Bundle</button>
+              <button id="debug-random-task" class="rounded-full border border-olive/20 px-4 py-2 text-sm font-semibold text-olive">Random Task</button>
+              <button id="debug-reset" class="rounded-full border border-red-200 px-4 py-2 text-sm font-semibold text-red-700">Debug Reset</button>
+            </div>
             <button id="clear-completed" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold">Clear Completed</button>
             <button id="add-task" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold">Add Task</button>
           </div>
@@ -136,7 +141,6 @@
               <select id="modal-task-status" class="mt-2 w-full rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
                 <option value="new">New</option>
                 <option value="in_progress">In Progress</option>
-                <option value="completed">Completed</option>
               </select>
             </label>
           </div>

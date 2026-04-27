@@ -39,7 +39,10 @@
             <a class="nav-link active" href="./Dashboard.html">Dashboard</a>
             <a class="nav-link" href="./refine-schedule.html">Schedule Refiner</a>
             <a class="nav-link" href="./tasks.html">Task Scheduling</a>
-            <button id="trigger-review-banner" class="nav-link" type="button">Test Review</button>
+            <div id="dashboard-developer-tools" class="hidden items-center gap-2 rounded-full border border-dashed border-graphite/12 bg-white/60 px-3 py-2">
+              <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-graphite/45">Developer</span>
+              <button id="trigger-review-banner" class="nav-link !px-3 !py-2" type="button">Test Review</button>
+            </div>
           </nav>
         </div>
       </header>
@@ -146,7 +149,6 @@
             <select id="quick-task-status" class="rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
               <option value="new">New</option>
               <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
             </select>
             <select id="quick-task-priority" class="rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
               <option value="high">High Priority</option>
