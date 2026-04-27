@@ -202,6 +202,13 @@ These rules should influence optimization and ranking, but can be relaxed if req
 - Within whichever factor is currently dominant, the other factor should still be used as a secondary ordering signal.
 - This rule is meant to shift the scheduler from long-range importance planning toward short-range deadline protection as the due date approaches.
 
+### Exact Priority Versus Due-Date Ranking Logic
+
+- If a task is due in less than `4` days, due date urgency should rank ahead of priority.
+- If a task is due in `4` days or more, priority should rank ahead of due date.
+- Within whichever factor is currently dominant, the other factor should still be used as a secondary ordering signal.
+- This rule is meant to shift the scheduler from long-range importance planning toward short-range deadline protection as the due date approaches.
+
 ### In-Progress Preference
 
 - Tasks with `status = in_progress` should be preferred over equally comparable `new` tasks.
@@ -224,6 +231,22 @@ These rules should influence optimization and ranking, but can be relaxed if req
 
 - When rescheduling, avoid unnecessary movement of already-planned future work unless there is a meaningful benefit.
 - Re-optimization should improve the schedule, not constantly reshuffle it.
+
+## Re-Optimization And History Preservation Rules
+
+- Any scheduled time in the past is fixed and cannot be changed.
+- The current active `15-minute` window is also fixed and cannot be changed.
+- Re-optimization may only affect time after the current `15-minute` window.
+- When a new task is added, the scheduler should update all eligible future periods across the planning horizon, such as the next `2` weeks.
+- Previously scheduled future work may be moved during re-optimization if needed, as long as fixed past time and the current `15-minute` window remain unchanged.
+- The scheduler should preserve history for reporting purposes even when future time is re-optimized.
+
+## Formal Incomplete-Task Status Definitions
+
+- A task is `complete` only if all of its required time is scheduled before its due date.
+- A task is `incomplete` if all of its total required time is not scheduled before its due date.
+- A task should not be considered complete simply because some portion of its work was scheduled.
+- If the schedule output needs more detail, incomplete tasks may still include additional metadata such as `missingMinutes`, but the main completion distinction is binary: complete or incomplete.
 
 ## Re-Optimization And History Preservation Rules
 
