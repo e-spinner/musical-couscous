@@ -648,7 +648,7 @@ function renderDashboard() {
   const scheduled = scheduleData?.schedule || [];
   const unscheduled = scheduleData?.unscheduled || [];
   const flatSegments = flattenScheduled(scheduled);
-  const todaySegments = flatSegments
+  const timelineSegments = flatSegments
     .filter((segment) => sameDay(new Date(segment.start), timelineDate))
     .sort((a, b) => new Date(a.start) - new Date(b.start));
   const remainingMinutes = availability.openBlocks.reduce(
@@ -665,12 +665,12 @@ function renderDashboard() {
   unscheduledCountEl.textContent = String(scheduleData?.summary?.incompleteCount || unscheduled.length);
   newCountEl.textContent = String(tasks.filter((task) => task.status === 'new').length);
   progressCountEl.textContent = String(tasks.filter((task) => task.status === 'in_progress').length);
-  dateLabel.textContent = timelineDate.toLocaleDateString('en-US', dateOptions);
+  dateLabel.textContent = today.toLocaleDateString('en-US', dateOptions);
   updateTimelineDayLabel();
 
-  renderPulse(scheduleData, todaySegments);
+  renderPulse(scheduleData, actualTodaySegments);
   renderScheduleHealth(scheduleData);
-  renderTodayTimeline(todaySegments);
+  renderTodayTimeline(timelineSegments);
   renderQueue(scheduled, unscheduled, tasks);
   renderCalendar(scheduled);
   updateReviewBanner(actualTodaySegments.length);
