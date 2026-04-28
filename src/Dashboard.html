@@ -39,7 +39,10 @@
             <a class="nav-link active" href="./Dashboard.html">Dashboard</a>
             <a class="nav-link" href="./refine-schedule.html">Schedule Refiner</a>
             <a class="nav-link" href="./tasks.html">Task Scheduling</a>
-            <button id="trigger-review-banner" class="nav-link" type="button">Test Review</button>
+            <div id="dashboard-developer-tools" class="hidden items-center gap-2 rounded-full border border-dashed border-graphite/12 bg-white/60 px-3 py-2">
+              <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-graphite/45">Developer</span>
+              <button id="trigger-review-banner" class="nav-link !px-3 !py-2" type="button">Test Review</button>
+            </div>
           </nav>
         </div>
       </header>
@@ -77,6 +80,7 @@
             </div>
           </div>
           <div id="pulse-cards" class="mt-6 space-y-4"></div>
+          <div id="dashboard-schedule-health" class="mt-6 hidden rounded-[1.5rem] border px-4 py-4 text-sm"></div>
         </div>
       </section>
 
@@ -88,10 +92,14 @@
               <button id="show-calendar" class="rounded-full px-4 py-2 text-sm font-bold text-graphite/60 transition hover:bg-white/50">2-Week Calendar</button>
             </div>
             <div class="flex gap-2">
+              <button id="timeline-prev-day" class="rounded-full border border-graphite/10 bg-white/70 px-4 py-2 text-sm font-semibold text-graphite/70 transition hover:bg-white" type="button" aria-label="Previous day">&larr;</button>
+              <button id="timeline-today" class="rounded-full border border-graphite/10 bg-white/70 px-4 py-2 text-sm font-semibold text-graphite/70 transition hover:bg-white" type="button">Today</button>
+              <button id="timeline-next-day" class="rounded-full border border-graphite/10 bg-white/70 px-4 py-2 text-sm font-semibold text-graphite/70 transition hover:bg-white" type="button" aria-label="Next day">&rarr;</button>
               <a class="rounded-full border border-graphite/10 px-4 py-2 text-sm font-semibold hover:bg-cream" href="./refine-schedule.html">Adjust availability</a>
             </div>
           </div>
           <div id="timeline-view" class="soft-scrollbar relative mt-4 flex-1 overflow-y-auto rounded-[1.5rem] bg-cream/60 p-5">
+            <p id="timeline-day-label" class="mb-5 text-lg font-bold text-graphite">Timeline</p>
             <div id="timeline-container" class="relative ml-14 h-[1080px] border-l-2 border-graphite/10">
               <div id="passed-time-overlay" class="absolute left-0 top-0 z-10 w-full bg-graphite/5" style="height: 0"></div>
               <div id="today-blocked-blocks"></div>
@@ -141,7 +149,6 @@
             <select id="quick-task-status" class="rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
               <option value="new">New</option>
               <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
             </select>
             <select id="quick-task-priority" class="rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
               <option value="high">High Priority</option>
@@ -174,6 +181,19 @@
         <div class="flex gap-2">
           <button id="dismiss-review-banner" class="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold">Later</button>
           <button id="open-review-modal" class="rounded-full bg-terracotta px-4 py-2 text-sm font-semibold text-white">Review Day</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dashboard-specific-windows-reminder" class="fixed inset-x-0 bottom-6 z-30 hidden px-6">
+      <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 rounded-[1.5rem] border border-white/20 bg-graphite px-6 py-4 text-cream shadow-2xl">
+        <div>
+          <p class="text-lg font-semibold">Specific windows still empty</p>
+          <p id="dashboard-specific-windows-reminder-text" class="text-sm text-cream/75"></p>
+        </div>
+        <div class="flex gap-2">
+          <button id="dismiss-dashboard-specific-windows-reminder" class="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold">Later</button>
+          <a class="rounded-full bg-terracotta px-4 py-2 text-sm font-semibold text-white" href="./refine-schedule.html">Open Refiner</a>
         </div>
       </div>
     </div>

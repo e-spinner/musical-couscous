@@ -12,10 +12,14 @@ const healthIndicator = document.getElementById('health-indicator');
 const planMeta = document.getElementById('plan-meta');
 const availabilityNote = document.getElementById('availability-note');
 const debugResetBtn = document.getElementById('debug-reset');
+const debugRandomTaskBtn = document.getElementById('debug-random-task');
+const debugExportBundleBtn = document.getElementById('debug-export-bundle');
+const developerToolsEl = document.getElementById('developer-tools');
 const availableHoursEl = document.getElementById('summary-available-hours');
 const taskCountEl = document.getElementById('summary-task-count');
 const scheduledCountEl = document.getElementById('summary-scheduled-count');
 const completedCountEl = document.getElementById('summary-completed-count');
+const scheduleHealthEl = document.getElementById('summary-schedule-health');
 const taskModal = document.getElementById('task-modal');
 const taskModalTitle = document.getElementById('task-modal-title');
 const closeTaskModalBtn = document.getElementById('close-task-modal');
@@ -47,48 +51,88 @@ const STATUS_META = {
     tone: 'border-graphite/10 bg-graphite/5 text-graphite/65'
   }
 };
-const DEFAULT_TASKS = [
-  {
-    id: crypto.randomUUID(),
-    title: 'Site analysis package',
-    estimateMinutes: 180,
-    dueDate: '2026-04-17',
-    status: 'new',
-    priority: 'high',
-    cognitiveLoad: 'high',
-    notes: ''
-  },
-  {
-    id: crypto.randomUUID(),
-    title: 'Zoning research summary',
-    estimateMinutes: 120,
-    dueDate: '2026-04-19',
-    status: 'in_progress',
-    priority: 'medium',
-    cognitiveLoad: 'medium',
-    notes: ''
-  },
-  {
-    id: crypto.randomUUID(),
-    title: 'Concept sketch revisions',
-    estimateMinutes: 90,
-    dueDate: '2026-04-21',
-    status: 'new',
-    priority: 'high',
-    cognitiveLoad: 'low',
-    notes: ''
-  }
-];
-
 let tasks = pruneCompletedTasks(loadTasks());
 let autoGenerateTimer = null;
 let isGenerating = false;
 let activeTaskId = null;
 
+const BASE_RANDOM_TASK_TEMPLATES = [
+  { title: 'Facade precedent matrix', estimateMinutes: 180 },
+  { title: 'Stair core compliance review', estimateMinutes: 120 },
+  { title: 'Lighting study revision', estimateMinutes: 135 },
+  { title: 'Model export cleanup', estimateMinutes: 90 },
+  { title: 'Material palette captions', estimateMinutes: 75 },
+  { title: 'Envelope section redraw', estimateMinutes: 150 },
+  { title: 'Accessibility markup pass', estimateMinutes: 105 },
+  { title: 'Render board sequencing', estimateMinutes: 165 }
+];
+
+function formatLocalDateOffset(daysFromToday) {
+  const nextDate = new Date();
+  nextDate.setHours(0, 0, 0, 0);
+  nextDate.setDate(nextDate.getDate() + daysFromToday);
+  return nextDate.toISOString().slice(0, 10);
+}
+
+function createDefaultTasks() {
+  return [
+    {
+      id: crypto.randomUUID(),
+      title: 'Site analysis package',
+      estimateMinutes: 180,
+      dueDate: formatLocalDateOffset(2),
+      status: 'new',
+      priority: 'high',
+      cognitiveLoad: 'high',
+      notes: ''
+    },
+    {
+      id: crypto.randomUUID(),
+      title: 'Zoning research summary',
+      estimateMinutes: 120,
+      dueDate: formatLocalDateOffset(4),
+      status: 'in_progress',
+      priority: 'medium',
+      cognitiveLoad: 'medium',
+      notes: ''
+    },
+    {
+      id: crypto.randomUUID(),
+      title: 'Concept sketch revisions',
+      estimateMinutes: 90,
+      dueDate: formatLocalDateOffset(6),
+      status: 'new',
+      priority: 'high',
+      cognitiveLoad: 'low',
+      notes: ''
+    }
+  ];
+}
+
+function buildRandomDeveloperTask() {
+  const template = BASE_RANDOM_TASK_TEMPLATES[Math.floor(Math.random() * BASE_RANDOM_TASK_TEMPLATES.length)];
+  const variationSteps = [-30, -15, 0, 15, 30, 45];
+  const estimateMinutes = Math.max(60, template.estimateMinutes + variationSteps[Math.floor(Math.random() * variationSteps.length)]);
+  const dueOffsetDays = [1, 2, 3, 4, 5, 6, 7, 9][Math.floor(Math.random() * 8)];
+  const priority = ['high', 'medium', 'low'][Math.floor(Math.random() * 3)];
+  const cognitiveLoad = ['high', 'medium', 'low'][Math.floor(Math.random() * 3)];
+  const status = Math.random() < 0.35 ? 'in_progress' : 'new';
+  return {
+    id: crypto.randomUUID(),
+    title: `${template.title} ${Math.floor(Math.random() * 90 + 10)}`,
+    estimateMinutes,
+    dueDate: formatLocalDateOffset(dueOffsetDays),
+    status,
+    priority,
+    cognitiveLoad,
+    notes: 'Developer seeded task for complex schedule testing.'
+  };
+}
+
 function loadTasks() {
   const raw = window.localStorage.getItem(STORAGE_KEYS.tasks);
   if (!raw) {
-    return DEFAULT_TASKS;
+    return createDefaultTasks();
   }
 
   try {
@@ -101,14 +145,26 @@ function loadTasks() {
           notes: '',
           ...task
         }))
-      : DEFAULT_TASKS;
+      : createDefaultTasks();
   } catch (error) {
-    return DEFAULT_TASKS;
+    return createDefaultTasks();
   }
 }
 
 function saveTasks() {
   window.localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function readLastSchedule() {
@@ -126,6 +182,10 @@ function readLastSchedule() {
 
 function writeLastSchedule(schedule) {
   window.localStorage.setItem(STORAGE_KEYS.lastSchedule, JSON.stringify(schedule));
+}
+
+function buildExportStamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 function pruneCompletedTasks(taskList) {
@@ -237,8 +297,8 @@ function updateAvailabilitySummary() {
 
   availableHoursEl.textContent = `${(totalMinutes / 60).toFixed(totalMinutes % 60 === 0 ? 0 : 1)}h`;
   availabilityNote.textContent = timeBlocks.length
-    ? `${timeBlocks.length} future availability blocks are ready. Optimization runs automatically in the background.`
-    : 'No saved availability yet. Mark time in Schedule Refiner first.';
+    ? `${timeBlocks.length} future block${timeBlocks.length === 1 ? '' : 's'} ready.`
+    : 'No availability saved yet.';
 }
 
 function renderTasks() {
@@ -295,6 +355,34 @@ function renderTasks() {
   saveTasks();
 }
 
+function renderScheduleHealth(payload) {
+  const health = Planner.getScheduleHealthMessage(payload);
+  scheduleHealthEl.textContent = health.message;
+  scheduleHealthEl.classList.remove(
+    'hidden',
+    'border-red-300/40',
+    'bg-red-50/10',
+    'text-red-100',
+    'border-olive/20',
+    'bg-olive/10',
+    'text-cream',
+    'border-white/10',
+    'bg-white/5',
+    'text-cream/75'
+  );
+
+  if (health.tone === 'warning') {
+    scheduleHealthEl.classList.add('border-red-300/40', 'bg-red-50/10', 'text-red-100');
+    return;
+  }
+  if (health.tone === 'success') {
+    scheduleHealthEl.classList.add('border-olive/20', 'bg-olive/10', 'text-cream');
+    return;
+  }
+
+  scheduleHealthEl.classList.add('border-white/10', 'bg-white/5', 'text-cream/75');
+}
+
 function formatLevel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -306,9 +394,47 @@ function formatDateOnly(isoString) {
   }).format(parseDueDateStart(isoString));
 }
 
+function ensureStatusOptions(selectEl, includeCompleted) {
+  const completedOption = selectEl.querySelector('option[value="completed"]');
+  if (includeCompleted) {
+    if (!completedOption) {
+      const option = document.createElement('option');
+      option.value = 'completed';
+      option.textContent = 'Completed';
+      selectEl.appendChild(option);
+    }
+    return;
+  }
+  if (completedOption) {
+    completedOption.remove();
+  }
+  if (selectEl.value === 'completed') {
+    selectEl.value = 'new';
+  }
+}
+
+function readAvailabilityRaw() {
+  const raw = window.localStorage.getItem(STORAGE_KEYS.availability);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function setDeveloperVisibility(isVisible) {
+  developerToolsEl.classList.toggle('hidden', !isVisible);
+  developerToolsEl.classList.toggle('flex', isVisible);
+}
+
 function openTaskModal(task = null) {
   const isNewTask = !task;
   activeTaskId = task?.id || null;
+  ensureStatusOptions(modalTaskStatus, !isNewTask);
   taskModalTitle.textContent = isNewTask ? 'Add Task' : 'Edit Task';
   modalTaskTitle.value = task?.title || '';
   modalTaskEstimate.value = String(task?.estimateMinutes || 60);
@@ -351,7 +477,7 @@ function bindEvents() {
     tasks = tasks.filter((task) => task.status !== 'completed');
     saveTasks();
     renderTasks();
-    scheduleAutoOptimization('Completed tasks cleared. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   debugResetBtn.addEventListener('click', () => {
@@ -361,7 +487,23 @@ function bindEvents() {
     renderTasks();
     updateScheduleSummary(null);
     hideFeedback();
-    planMeta.textContent = 'Planner reset for debugging';
+    planMeta.textContent = 'Reset';
+  });
+
+  debugRandomTaskBtn.addEventListener('click', () => {
+    tasks.push(buildRandomDeveloperTask());
+    renderTasks();
+    scheduleAutoOptimization('Updating...');
+  });
+
+  debugExportBundleBtn.addEventListener('click', () => {
+    downloadJsonFile(`architecture-debug-bundle-${buildExportStamp()}.json`, {
+      exportedAt: new Date().toISOString(),
+      availability: readAvailabilityRaw(),
+      schedule: readLastSchedule(),
+      tasks
+    });
+    showFeedback('Debug bundle exported for troubleshooting.', 'success');
   });
 
   closeTaskModalBtn.addEventListener('click', closeTaskModal);
@@ -377,9 +519,13 @@ function bindEvents() {
       taskModalFeedback.textContent = 'Add a title, estimate, and due date.';
       return;
     }
-      if (estimateMinutes < 0 || estimateMinutes > 20160) {
-          taskModalFeedback.textContent = 'Estimate must be 0 to 2 weeks.';
-          return;
+    if (nextTask.estimateMinutes <= 0 || nextTask.estimateMinutes > 20160) {
+      taskModalFeedback.textContent = 'Estimate must be between 15 minutes and 2 weeks.';
+      return;
+    }
+    if (!activeTaskId && nextTask.status === 'completed') {
+      taskModalFeedback.textContent = 'New tasks cannot start as completed.';
+      return;
     }
 
     if (activeTaskId) {
@@ -390,7 +536,7 @@ function bindEvents() {
       ));
       closeTaskModal();
       renderTasks();
-      scheduleAutoOptimization('Task updated. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
       return;
     }
 
@@ -400,7 +546,7 @@ function bindEvents() {
     });
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task added. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   deleteTaskBtn.addEventListener('click', () => {
@@ -410,7 +556,7 @@ function bindEvents() {
     tasks = tasks.filter((task) => task.id !== activeTaskId);
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task removed. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   document.addEventListener('click', (event) => {
@@ -426,13 +572,29 @@ function bindEvents() {
   window.addEventListener('storage', (event) => {
     if (event.key === STORAGE_KEYS.availability) {
       updateAvailabilitySummary();
-      scheduleAutoOptimization('Availability changed. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
     }
     if (event.key === STORAGE_KEYS.tasks) {
       tasks = pruneCompletedTasks(loadTasks());
       renderTasks();
       updateScheduleSummary(readLastSchedule());
     }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Shift') {
+      setDeveloperVisibility(true);
+    }
+  });
+
+  document.addEventListener('keyup', (event) => {
+    if (event.key === 'Shift') {
+      setDeveloperVisibility(false);
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    setDeveloperVisibility(false);
   });
 }
 
@@ -452,7 +614,7 @@ async function checkHealth() {
   }
 }
 
-function scheduleAutoOptimization(message = 'Optimizing in the background...') {
+function scheduleAutoOptimization(message = 'Updating...') {
   if (autoGenerateTimer) {
     window.clearTimeout(autoGenerateTimer);
   }
@@ -478,41 +640,29 @@ async function generatePlan(isBackgroundRun = false) {
   const schedulableTasks = buildSchedulingTasks(tasks, previousSchedule, cutoff);
 
   if (!availableBlocks.length) {
-    planMeta.textContent = 'Waiting for availability';
+    planMeta.textContent = 'No availability';
     updateScheduleSummary(previousSchedule);
+    renderScheduleHealth(previousSchedule);
     if (!isBackgroundRun) {
-      showFeedback('No availability found. Save time in Schedule Refiner first.', 'error');
+      showFeedback('No availability found.', 'error');
     }
     return;
   }
 
   if (!schedulableTasks.length) {
-    const emptySchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff);
-    writeLastSchedule({
-      summary: {
-        timeBlockCount: availableBlocks.length,
-        taskCount: 0,
-        scheduledCount: emptySchedule.schedule.length,
-        unscheduledCount: 0,
-        totalAvailableMinutes: availableBlocks.reduce(
-          (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
-          0
-        ),
-        totalPlannedMinutes: 0
-      },
-      schedule: emptySchedule.schedule,
-      unscheduled: []
-    });
-    updateScheduleSummary(readLastSchedule());
-    planMeta.textContent = 'No remaining tasks to optimize';
+    const mergedSchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff, availableBlocks);
+    writeLastSchedule(mergedSchedule);
+    updateScheduleSummary(mergedSchedule);
+    renderScheduleHealth(mergedSchedule);
+    planMeta.textContent = 'Up to date';
     if (!isBackgroundRun) {
-      showFeedback('Nothing new needs scheduling right now.', 'success');
+      showFeedback('Nothing new to schedule.', 'success');
     }
     return;
   }
 
   isGenerating = true;
-  planMeta.textContent = 'Optimizing now...';
+  planMeta.textContent = 'Updating...';
 
   try {
     const response = await fetch(`${API_BASE_URL}/api/schedule`, {
@@ -534,15 +684,23 @@ async function generatePlan(isBackgroundRun = false) {
       throw new Error(payload.error || 'Unable to generate a schedule.');
     }
 
-    const mergedSchedule = mergeScheduleHistory(previousSchedule, payload, tasks, cutoff);
+    const mergedSchedule = mergeScheduleHistory(previousSchedule, payload, tasks, cutoff, availableBlocks);
     writeLastSchedule(mergedSchedule);
     updateScheduleSummary(mergedSchedule);
-    planMeta.textContent = 'Plan synced in the background';
+    renderScheduleHealth(mergedSchedule);
+    planMeta.textContent = mergedSchedule.summary?.incompleteCount
+      ? 'Needs attention'
+      : 'Up to date';
     if (!isBackgroundRun) {
-      showFeedback('Schedule updated.', 'success');
+      showFeedback(
+        mergedSchedule.summary?.incompleteCount
+          ? 'Updated. Some tasks still miss their deadlines.'
+          : 'Updated.',
+        mergedSchedule.summary?.incompleteCount ? 'error' : 'success'
+      );
     }
   } catch (error) {
-    planMeta.textContent = 'Optimization paused';
+    planMeta.textContent = 'Error';
     console.error('Background optimization failed:', error);
     showFeedback(error.message, 'error');
   } finally {
@@ -562,10 +720,12 @@ function updateScheduleSummary(payload) {
   const summary = payload?.summary;
   if (!summary) {
     scheduledCountEl.textContent = '0';
+    renderScheduleHealth(null);
     return;
   }
 
   scheduledCountEl.textContent = String(summary.scheduledCount || 0);
+  renderScheduleHealth(payload);
 }
 
 function showFeedback(message, tone) {
@@ -584,6 +744,7 @@ function hideFeedback() {
 
 tasks = pruneCompletedTasks(tasks);
 saveTasks();
+setDeveloperVisibility(false);
 renderTasks();
 bindEvents();
 checkHealth();

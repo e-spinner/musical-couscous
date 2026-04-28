@@ -50,9 +50,14 @@
             <h2 class="mt-2 font-display text-3xl">Tasks</h2>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button id="debug-reset" class="rounded-full border border-red-200 px-4 py-2 text-sm font-semibold text-red-700">Debug Reset</button>
-            <button id="clear-completed" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold">Clear Completed</button>
-            <button id="add-task" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold">Add Task</button>
+            <div id="developer-tools" class="hidden items-center gap-2 rounded-full border border-dashed border-graphite/15 bg-cream/70 px-3 py-2">
+              <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-graphite/45">Developer</span>
+              <button id="debug-export-bundle" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold text-graphite/70" title="Download tasks, schedule, and availability as one JSON file.">Export Bundle</button>
+              <button id="debug-random-task" class="rounded-full border border-olive/20 px-4 py-2 text-sm font-semibold text-olive" title="Add a randomized developer task for schedule testing.">Random Task</button>
+              <button id="debug-reset" class="rounded-full border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" title="Clear tasks and the saved schedule for debugging.">Debug Reset</button>
+            </div>
+            <button id="clear-completed" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold" title="Remove tasks already marked completed.">Clear Completed</button>
+            <button id="add-task" class="rounded-full border border-graphite/15 px-4 py-2 text-sm font-semibold" title="Create a new task.">Add Task</button>
           </div>
         </div>
         <div id="feedback" class="mt-5 hidden rounded-2xl px-4 py-3 text-sm"></div>
@@ -86,8 +91,9 @@
               <p class="mt-1 text-sm text-cream/70">Completed tasks</p>
             </div>
           </div>
-          <div id="availability-note" class="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-cream/75"></div>
-          <p id="plan-meta" class="mt-4 text-sm text-cream/65">Waiting for changes</p>
+          <div id="availability-note" class="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-cream/75" title="Open blocks are pulled from the Schedule Refiner."></div>
+          <div id="summary-schedule-health" class="mt-4 hidden rounded-2xl border px-4 py-3 text-sm" title="Scheduler deadline status for active work."></div>
+          <p id="plan-meta" class="mt-4 text-sm text-cream/65" title="Current scheduler activity.">Ready</p>
         </div>
       </section>
     </main>
@@ -135,7 +141,6 @@
               <select id="modal-task-status" class="mt-2 w-full rounded-2xl border border-graphite/10 bg-cream px-4 py-3 outline-none focus:border-terracotta">
                 <option value="new">New</option>
                 <option value="in_progress">In Progress</option>
-                <option value="completed">Completed</option>
               </select>
             </label>
           </div>

@@ -20,8 +20,14 @@ const scheduledCountEl = document.getElementById('dashboard-scheduled-count');
 const unscheduledCountEl = document.getElementById('dashboard-unscheduled-count');
 const newCountEl = document.getElementById('dashboard-new-count');
 const progressCountEl = document.getElementById('dashboard-progress-count');
+const dashboardScheduleHealthEl = document.getElementById('dashboard-schedule-health');
+const dashboardDeveloperToolsEl = document.getElementById('dashboard-developer-tools');
 const showTimelineBtn = document.getElementById('show-timeline');
 const showCalendarBtn = document.getElementById('show-calendar');
+const timelineDayLabel = document.getElementById('timeline-day-label');
+const timelinePrevDayBtn = document.getElementById('timeline-prev-day');
+const timelineTodayBtn = document.getElementById('timeline-today');
+const timelineNextDayBtn = document.getElementById('timeline-next-day');
 const taskModal = document.getElementById('task-modal');
 const taskModalTitle = document.getElementById('task-modal-title');
 const openTaskModalBtn = document.getElementById('open-task-modal');
@@ -36,6 +42,10 @@ const saveReviewBtn = document.getElementById('save-review');
 const reviewBanner = document.getElementById('review-banner');
 const dismissReviewBannerBtn = document.getElementById('dismiss-review-banner');
 const triggerReviewBannerBtn = document.getElementById('trigger-review-banner');
+const dashboardSpecificWindowsReminder = document.getElementById('dashboard-specific-windows-reminder');
+const dashboardSpecificWindowsReminderText = document.getElementById('dashboard-specific-windows-reminder-text');
+const dismissDashboardSpecificWindowsReminderBtn = document.getElementById('dismiss-dashboard-specific-windows-reminder');
+const SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY = 'architectureSpecificWindowsReminderDismissedSession';
 const addTaskBtn = document.getElementById('dashboard-add-task');
 const quickTaskTitle = document.getElementById('quick-task-title');
 const quickTaskEstimate = document.getElementById('quick-task-estimate');
@@ -46,10 +56,54 @@ const quickTaskCognitive = document.getElementById('quick-task-cognitive');
 const quickAddFeedback = document.getElementById('quick-add-feedback');
 let forceReviewBanner = false;
 let activeTaskId = null;
+let selectedTimelineDate = createDayStart(new Date());
 
 const dateOptions = { weekday: 'long', month: 'long', day: 'numeric' };
 dateLabel.textContent = new Date().toLocaleDateString('en-US', dateOptions);
 deleteTaskBtn.classList.add('hidden');
+
+function createDayStart(input) {
+  const next = new Date(input);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function isSameDayValue(first, second) {
+  return first.getFullYear() === second.getFullYear()
+    && first.getMonth() === second.getMonth()
+    && first.getDate() === second.getDate();
+}
+
+function getTimelineBounds() {
+  const availability = deriveAvailabilityBlocks();
+  const start = createDayStart(availability.startMonday || Planner.getCurrentMonday());
+  const end = new Date(start);
+  end.setDate(end.getDate() + 13);
+  end.setHours(0, 0, 0, 0);
+  return { start, end };
+}
+
+function clampTimelineDate(date) {
+  const { start, end } = getTimelineBounds();
+  if (date < start) {
+    return start;
+  }
+  if (date > end) {
+    return end;
+  }
+  return date;
+}
+
+function updateTimelineDayLabel() {
+  const today = createDayStart(new Date());
+  const isToday = isSameDayValue(selectedTimelineDate, today);
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  }).format(selectedTimelineDate);
+  timelineDayLabel.textContent = `Timeline: ${isToday ? 'Today' : formatted}`;
+}
 
 function readSchedule() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -126,6 +180,50 @@ function formatLevel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function renderScheduleHealth(scheduleData) {
+  const health = Planner.getScheduleHealthMessage(scheduleData);
+  dashboardScheduleHealthEl.textContent = health.message;
+  dashboardScheduleHealthEl.classList.remove(
+    'hidden',
+    'border-red-200/40',
+    'bg-red-50/10',
+    'text-red-100',
+    'border-olive/20',
+    'bg-olive/10',
+    'text-cream',
+    'border-white/10',
+    'bg-white/5',
+    'text-cream/75'
+  );
+
+  if (health.tone === 'warning') {
+    dashboardScheduleHealthEl.classList.add('border-red-200/40', 'bg-red-50/10', 'text-red-100');
+    return;
+  }
+  if (health.tone === 'success') {
+    dashboardScheduleHealthEl.classList.add('border-olive/20', 'bg-olive/10', 'text-cream');
+    return;
+  }
+
+  dashboardScheduleHealthEl.classList.add('border-white/10', 'bg-white/5', 'text-cream/75');
+}
+
+function updateSpecificWindowsReminder() {
+  const availability = readAvailability();
+  const reminders = Planner.getSpecificWindowsReminderMessages(availability);
+
+  if (!reminders.length || window.sessionStorage.getItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY) === 'true') {
+    dashboardSpecificWindowsReminder.classList.add('hidden');
+    if (!reminders.length) {
+      window.sessionStorage.removeItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY);
+    }
+    return;
+  }
+
+  dashboardSpecificWindowsReminderText.textContent = `${reminders.join(' ')} Add week-specific overrides if those days differ from the routine template.`;
+  dashboardSpecificWindowsReminder.classList.remove('hidden');
+}
+
 for (let hour = 6; hour <= 23; hour += 1) {
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
@@ -146,6 +244,14 @@ function updateTimelineNow() {
   const now = new Date();
   const hours = now.getHours();
   const minutes = now.getMinutes();
+  const isViewingToday = isSameDayValue(selectedTimelineDate, createDayStart(now));
+
+  if (!isViewingToday) {
+    currentTimeLine.style.display = 'none';
+    passedTimeOverlay.style.height = '0%';
+    window.__timelineScrolled = false;
+    return;
+  }
 
   if (hours >= 6 && hours <= 23) {
     const pxPos = (hours - 6) * 60 + minutes;
@@ -168,9 +274,7 @@ function updateTimelineNow() {
 }
 
 function sameDay(first, second) {
-  return first.getFullYear() === second.getFullYear()
-    && first.getMonth() === second.getMonth()
-    && first.getDate() === second.getDate();
+  return isSameDayValue(first, second);
 }
 
 function formatRange(startIso, endIso) {
@@ -285,6 +389,7 @@ function addThirtyMinutes(date, time) {
 
 function openTaskEditor(task = null) {
   activeTaskId = task?.id || null;
+  ensureStatusOptions(quickTaskStatus, Boolean(task));
   taskModalTitle.textContent = activeTaskId ? 'Edit Task' : 'Add Task';
   quickTaskTitle.value = task?.title || '';
   quickTaskEstimate.value = String(task?.estimateMinutes || 60);
@@ -305,12 +410,36 @@ function closeTaskEditor() {
   quickAddFeedback.textContent = '';
 }
 
+function ensureStatusOptions(selectEl, includeCompleted) {
+  const completedOption = selectEl.querySelector('option[value="completed"]');
+  if (includeCompleted) {
+    if (!completedOption) {
+      const option = document.createElement('option');
+      option.value = 'completed';
+      option.textContent = 'Completed';
+      selectEl.appendChild(option);
+    }
+    return;
+  }
+  if (completedOption) {
+    completedOption.remove();
+  }
+  if (selectEl.value === 'completed') {
+    selectEl.value = 'new';
+  }
+}
+
+function setDeveloperVisibility(isVisible) {
+  dashboardDeveloperToolsEl.classList.toggle('hidden', !isVisible);
+  dashboardDeveloperToolsEl.classList.toggle('flex', isVisible);
+}
+
 function buildSchedulingTasks(taskList, previousSchedule, cutoff) {
   return Planner.buildSchedulingTasks(taskList, previousSchedule, cutoff);
 }
 
 function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) {
-  return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff);
+  return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff, deriveAvailabilityBlocks().openBlocks);
 }
 
 async function syncSchedule(taskList) {
@@ -324,27 +453,13 @@ async function syncSchedule(taskList) {
   const schedulableTasks = buildSchedulingTasks(taskList, previousSchedule, cutoff);
 
   if (!availableBlocks.length) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, taskList, cutoff)));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Planner.mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, taskList, cutoff, availableBlocks)));
     return;
   }
 
   if (!schedulableTasks.length) {
-    const mergedSchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, taskList, cutoff);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      summary: {
-        timeBlockCount: availableBlocks.length,
-        taskCount: 0,
-        scheduledCount: mergedSchedule.schedule.length,
-        unscheduledCount: 0,
-        totalAvailableMinutes: availableBlocks.reduce(
-          (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
-          0
-        ),
-        totalPlannedMinutes: 0
-      },
-      schedule: mergedSchedule.schedule,
-      unscheduled: []
-    }));
+    const mergedSchedule = Planner.mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, taskList, cutoff, availableBlocks);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedSchedule));
     return;
   }
 
@@ -364,7 +479,7 @@ async function syncSchedule(taskList) {
     throw new Error(payload.error || 'Unable to update the schedule.');
   }
 
-  const mergedSchedule = mergeScheduleHistory(previousSchedule, payload, taskList, cutoff);
+  const mergedSchedule = Planner.mergeScheduleHistory(previousSchedule, payload, taskList, cutoff, availableBlocks);
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedSchedule));
 }
 
@@ -400,9 +515,9 @@ function renderPulse(schedule, todaySegments) {
 
 function renderTodayTimeline(todaySegments) {
   const availability = deriveAvailabilityBlocks();
-  const today = new Date();
+  const selectedDate = createDayStart(selectedTimelineDate);
   const todayBlocked = availability.blockedBlocks
-    .filter((block) => sameDay(new Date(block.start), today))
+    .filter((block) => sameDay(new Date(block.start), selectedDate))
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
   todayBlockedBlocks.innerHTML = '';
@@ -423,7 +538,7 @@ function renderTodayTimeline(todaySegments) {
   if (!todaySegments.length) {
     todayTaskBlocks.innerHTML = `
       <div class="absolute left-4 right-4 top-8 rounded-[1.25rem] border border-dashed border-graphite/15 bg-white/80 p-4 text-sm text-graphite/55">
-        No tasks scheduled today.
+        No tasks scheduled for this day.
       </div>
     `;
     return;
@@ -463,16 +578,17 @@ function renderQueue(schedule, unscheduled, tasks) {
   const scheduledCards = (schedule || []).map((task) => {
     const firstSegment = task.segments[0];
     const taskMeta = tasks.find((candidate) => candidate.id === task.id);
+    const isIncomplete = task.completionStatus === 'incomplete' || Number(task.missingMinutes || 0) > 0;
     return `
-      <button class="block w-full rounded-[1.5rem] border border-graphite/10 bg-white p-5 text-left transition hover:border-terracotta/20" type="button" data-edit-task="${task.id}">
+      <button class="block w-full rounded-[1.5rem] border ${isIncomplete ? 'border-red-200 bg-red-50/60 hover:border-red-300' : 'border-graphite/10 bg-white hover:border-terracotta/20'} p-5 text-left transition" type="button" data-edit-task="${task.id}">
         <div class="flex items-start justify-between gap-3">
           <h3 class="text-lg font-semibold">${task.title}</h3>
-          <span class="chip bg-olive/15 text-olive">${formatStatus(taskMeta?.status || 'new')}</span>
+          <span class="chip ${isIncomplete ? 'bg-white text-red-700' : 'bg-olive/15 text-olive'}">${isIncomplete ? 'Incomplete' : formatStatus(taskMeta?.status || 'new')}</span>
         </div>
         <p class="mt-3 text-sm text-graphite/60">${task.estimateMinutes} min | Due ${formatDueDate(task.dueDate)}</p>
         <p class="mt-1 text-sm text-graphite/50">${formatLevel(taskMeta?.priority || 'medium')} priority | ${formatLevel(taskMeta?.cognitiveLoad || 'medium')} load</p>
         <p class="mt-2 text-sm text-graphite/50">${formatRange(firstSegment.start, firstSegment.end)}</p>
-        ${task.missingMinutes ? `<p class="mt-2 text-sm text-terracotta">${task.missingMinutes} min still needs space.</p>` : ''}
+        ${task.missingMinutes ? `<p class="mt-2 text-sm text-red-700">${task.missingMinutes} min still needs space before the deadline.</p>` : ''}
       </button>
     `;
   });
@@ -481,11 +597,11 @@ function renderQueue(schedule, unscheduled, tasks) {
     <button class="block w-full rounded-[1.5rem] border border-red-200 bg-red-50 p-5 text-left transition hover:border-red-300" type="button" data-edit-task="${task.id}">
       <div class="flex items-start justify-between gap-3">
         <h3 class="text-lg font-semibold text-red-900">${task.title}</h3>
-        <span class="chip bg-white text-red-700">New</span>
+        <span class="chip bg-white text-red-700">Incomplete</span>
       </div>
       <p class="mt-3 text-sm text-red-800">Due ${formatDueDate(task.dueDate)}</p>
       <p class="mt-1 text-sm text-red-700">${formatLevel(task.priority || 'medium')} priority | ${formatLevel(task.cognitiveLoad || 'medium')} load</p>
-      <p class="mt-2 text-sm text-red-700">${task.missingMinutes} minutes still need space.</p>
+      <p class="mt-2 text-sm text-red-700">${task.missingMinutes} minutes still need space before the deadline.</p>
     </button>
   `);
 
@@ -572,35 +688,75 @@ function renderDashboard() {
   const scheduleData = readSchedule();
   const tasks = readTasks();
   const availability = deriveAvailabilityBlocks();
+  selectedTimelineDate = clampTimelineDate(createDayStart(selectedTimelineDate));
   const today = new Date();
+  const timelineDate = createDayStart(selectedTimelineDate);
   const scheduled = scheduleData?.schedule || [];
   const unscheduled = scheduleData?.unscheduled || [];
   const flatSegments = flattenScheduled(scheduled);
-  const todaySegments = flatSegments
-    .filter((segment) => sameDay(new Date(segment.start), today))
+  const timelineSegments = flatSegments
+    .filter((segment) => sameDay(new Date(segment.start), timelineDate))
     .sort((a, b) => new Date(a.start) - new Date(b.start));
-
-  const todayMinutes = todaySegments.reduce(
-    (sum, segment) => sum + (new Date(segment.end).getTime() - new Date(segment.start).getTime()) / 60000,
-    0
-  );
   const remainingMinutes = availability.openBlocks.reduce(
     (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
     0
   );
 
+  const actualTodaySegments = flatSegments
+    .filter((segment) => sameDay(new Date(segment.start), today))
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
   remainingHoursEl.textContent = `${(remainingMinutes / 60).toFixed(remainingMinutes % 60 === 0 ? 0 : 1)}h`;
-  scheduledCountEl.textContent = String(scheduled.length);
-  unscheduledCountEl.textContent = String(unscheduled.length);
+  scheduledCountEl.textContent = String(scheduleData?.summary?.scheduledCount || scheduled.length);
+  unscheduledCountEl.textContent = String(scheduleData?.summary?.incompleteCount || unscheduled.length);
   newCountEl.textContent = String(tasks.filter((task) => task.status === 'new').length);
   progressCountEl.textContent = String(tasks.filter((task) => task.status === 'in_progress').length);
+  dateLabel.textContent = today.toLocaleDateString('en-US', dateOptions);
+  updateTimelineDayLabel();
 
-  renderPulse(scheduleData, todaySegments);
-  renderTodayTimeline(todaySegments);
+  renderPulse(scheduleData, actualTodaySegments);
+  renderScheduleHealth(scheduleData);
+  updateSpecificWindowsReminder();
+  renderTodayTimeline(timelineSegments);
   renderQueue(scheduled, unscheduled, tasks);
   renderCalendar(scheduled);
-  updateReviewBanner(todaySegments.length);
+  updateReviewBanner(actualTodaySegments.length);
+  updateTimelineNow();
 }
+
+function isTypingTarget(target) {
+  return target instanceof HTMLElement
+    && (
+      target.isContentEditable
+      || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+    );
+}
+
+function shiftTimelineDay(delta) {
+  const next = createDayStart(selectedTimelineDate);
+  next.setDate(next.getDate() + delta);
+  const clamped = clampTimelineDate(next);
+  if (isSameDayValue(clamped, selectedTimelineDate)) {
+    return;
+  }
+  selectedTimelineDate = clamped;
+  window.__timelineScrolled = false;
+  renderDashboard();
+}
+
+timelinePrevDayBtn.addEventListener('click', () => {
+  shiftTimelineDay(-1);
+});
+
+timelineTodayBtn.addEventListener('click', () => {
+  selectedTimelineDate = clampTimelineDate(createDayStart(new Date()));
+  window.__timelineScrolled = false;
+  renderDashboard();
+});
+
+timelineNextDayBtn.addEventListener('click', () => {
+  shiftTimelineDay(1);
+});
 
 function updateReviewBanner(hasTodayWork) {
   const dismissed = window.sessionStorage.getItem('architectureReviewBannerDismissed') === 'true';
@@ -708,6 +864,10 @@ addTaskBtn.addEventListener('click', async () => {
 
   if (!title || !dueDate || !estimate) {
     quickAddFeedback.textContent = 'Add a title, estimate, and due date.';
+    return;
+  }
+  if (!activeTaskId && status === 'completed') {
+    quickAddFeedback.textContent = 'New tasks cannot start as completed.';
     return;
   }
 
@@ -859,10 +1019,44 @@ dismissReviewBannerBtn.addEventListener('click', () => {
   forceReviewBanner = false;
   reviewBanner.classList.add('hidden');
 });
+dismissDashboardSpecificWindowsReminderBtn.addEventListener('click', () => {
+  window.sessionStorage.setItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY, 'true');
+  dashboardSpecificWindowsReminder.classList.add('hidden');
+});
 triggerReviewBannerBtn.addEventListener('click', () => {
   forceReviewBanner = true;
   window.sessionStorage.removeItem('architectureReviewBannerDismissed');
   renderDashboard();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Shift') {
+    setDeveloperVisibility(true);
+  }
+});
+
+document.addEventListener('keyup', (event) => {
+  if (event.key === 'Shift') {
+    setDeveloperVisibility(false);
+  }
+});
+
+window.addEventListener('blur', () => {
+  setDeveloperVisibility(false);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (isTypingTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    shiftTimelineDay(-1);
+  }
+  if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    shiftTimelineDay(1);
+  }
 });
 
 showTimelineBtn.addEventListener('click', () => {
@@ -881,4 +1075,5 @@ showCalendarBtn.addEventListener('click', () => {
 
 window.setInterval(updateTimelineNow, 60000);
 updateTimelineNow();
+setDeveloperVisibility(false);
 renderDashboard();
