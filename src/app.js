@@ -297,8 +297,8 @@ function updateAvailabilitySummary() {
 
   availableHoursEl.textContent = `${(totalMinutes / 60).toFixed(totalMinutes % 60 === 0 ? 0 : 1)}h`;
   availabilityNote.textContent = timeBlocks.length
-    ? `${timeBlocks.length} future availability blocks are ready. Optimization runs automatically in the background.`
-    : 'No saved availability yet. Mark time in Schedule Refiner first.';
+    ? `${timeBlocks.length} future block${timeBlocks.length === 1 ? '' : 's'} ready.`
+    : 'No availability saved yet.';
 }
 
 function renderTasks() {
@@ -477,7 +477,7 @@ function bindEvents() {
     tasks = tasks.filter((task) => task.status !== 'completed');
     saveTasks();
     renderTasks();
-    scheduleAutoOptimization('Completed tasks cleared. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   debugResetBtn.addEventListener('click', () => {
@@ -487,13 +487,13 @@ function bindEvents() {
     renderTasks();
     updateScheduleSummary(null);
     hideFeedback();
-    planMeta.textContent = 'Planner reset for debugging';
+    planMeta.textContent = 'Reset';
   });
 
   debugRandomTaskBtn.addEventListener('click', () => {
     tasks.push(buildRandomDeveloperTask());
     renderTasks();
-    scheduleAutoOptimization('Developer task added. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   debugExportBundleBtn.addEventListener('click', () => {
@@ -536,7 +536,7 @@ function bindEvents() {
       ));
       closeTaskModal();
       renderTasks();
-      scheduleAutoOptimization('Task updated. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
       return;
     }
 
@@ -546,7 +546,7 @@ function bindEvents() {
     });
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task added. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   deleteTaskBtn.addEventListener('click', () => {
@@ -556,7 +556,7 @@ function bindEvents() {
     tasks = tasks.filter((task) => task.id !== activeTaskId);
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task removed. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   document.addEventListener('click', (event) => {
@@ -572,7 +572,7 @@ function bindEvents() {
   window.addEventListener('storage', (event) => {
     if (event.key === STORAGE_KEYS.availability) {
       updateAvailabilitySummary();
-      scheduleAutoOptimization('Availability changed. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
     }
     if (event.key === STORAGE_KEYS.tasks) {
       tasks = pruneCompletedTasks(loadTasks());
@@ -614,7 +614,7 @@ async function checkHealth() {
   }
 }
 
-function scheduleAutoOptimization(message = 'Optimizing in the background...') {
+function scheduleAutoOptimization(message = 'Updating...') {
   if (autoGenerateTimer) {
     window.clearTimeout(autoGenerateTimer);
   }
@@ -640,11 +640,11 @@ async function generatePlan(isBackgroundRun = false) {
   const schedulableTasks = buildSchedulingTasks(tasks, previousSchedule, cutoff);
 
   if (!availableBlocks.length) {
-    planMeta.textContent = 'Waiting for availability';
+    planMeta.textContent = 'No availability';
     updateScheduleSummary(previousSchedule);
     renderScheduleHealth(previousSchedule);
     if (!isBackgroundRun) {
-      showFeedback('No availability found. Save time in Schedule Refiner first.', 'error');
+      showFeedback('No availability found.', 'error');
     }
     return;
   }
@@ -654,15 +654,15 @@ async function generatePlan(isBackgroundRun = false) {
     writeLastSchedule(mergedSchedule);
     updateScheduleSummary(mergedSchedule);
     renderScheduleHealth(mergedSchedule);
-    planMeta.textContent = 'No remaining tasks to optimize';
+    planMeta.textContent = 'Up to date';
     if (!isBackgroundRun) {
-      showFeedback('Nothing new needs scheduling right now.', 'success');
+      showFeedback('Nothing new to schedule.', 'success');
     }
     return;
   }
 
   isGenerating = true;
-  planMeta.textContent = 'Optimizing now...';
+  planMeta.textContent = 'Updating...';
 
   try {
     const response = await fetch(`${API_BASE_URL}/api/schedule`, {
@@ -689,18 +689,18 @@ async function generatePlan(isBackgroundRun = false) {
     updateScheduleSummary(mergedSchedule);
     renderScheduleHealth(mergedSchedule);
     planMeta.textContent = mergedSchedule.summary?.incompleteCount
-      ? 'Plan synced with unresolved task deadlines'
-      : 'Plan synced in the background';
+      ? 'Needs attention'
+      : 'Up to date';
     if (!isBackgroundRun) {
       showFeedback(
         mergedSchedule.summary?.incompleteCount
-          ? 'Schedule updated, but some tasks still cannot be fully completed before their due dates.'
-          : 'Schedule updated.',
+          ? 'Updated. Some tasks still miss their deadlines.'
+          : 'Updated.',
         mergedSchedule.summary?.incompleteCount ? 'error' : 'success'
       );
     }
   } catch (error) {
-    planMeta.textContent = 'Optimization paused';
+    planMeta.textContent = 'Error';
     console.error('Background optimization failed:', error);
     showFeedback(error.message, 'error');
   } finally {

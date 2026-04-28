@@ -124,6 +124,9 @@ function updateCellVisual(cell, isSpecificBlocked, isRoutineBlocked, isRoutineTa
 function createGrid(startIndex, numCols, titleText, isRoutineTab) {
   const wrapper = document.createElement('section');
   wrapper.className = 'module-card overflow-hidden rounded-[1.75rem]';
+  wrapper.title = isRoutineTab
+    ? 'Drag to mark blocked time in the weekly routine. Hold Shift while dragging to box select.'
+    : 'Drag to mark blocked time for this week. Hold Shift while dragging to box select.';
 
   const header = document.createElement('div');
   header.className = 'border-b border-graphite/10 bg-cream/80 px-5 py-4';
@@ -260,9 +263,6 @@ function renderCalendar() {
   }
 
   calendarContainer.appendChild(createGrid(0, 7, 'Week 1', false));
-  const divider = document.createElement('div');
-  divider.className = 'mx-1 h-5 rounded-full bg-[linear-gradient(90deg,rgba(191,91,61,0.18),rgba(106,122,84,0.18))]';
-  calendarContainer.appendChild(divider);
   calendarContainer.appendChild(createGrid(7, 7, 'Week 2', false));
 }
 
@@ -336,6 +336,13 @@ function setSaveFeedback(message, tone = 'neutral') {
   saveFeedback.classList.add('text-cream/70');
 }
 
+function getSaveFeedbackMessage(message, tone) {
+  if (tone === 'success' && message === 'On track.') {
+    return '';
+  }
+  return message;
+}
+
 function getNextHalfHour() {
   return Planner.getNextHalfHour();
 }
@@ -401,12 +408,12 @@ function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) 
 async function syncScheduleFromAvailability() {
   const tasks = readTasks();
   if (!tasks.length) {
-    return { state: 'saved', message: 'Availability saved. No tasks to optimize yet.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   const timeBlocks = deriveOpenBlocks();
   if (!timeBlocks.length) {
-    return { state: 'saved', message: 'Availability saved. There are no future open blocks yet.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   const previousSchedule = readSchedule();
@@ -418,7 +425,7 @@ async function syncScheduleFromAvailability() {
   const schedulableTasks = buildSchedulingTasks(tasks, previousSchedule, cutoff);
 
   if (!availableBlocks.length) {
-    return { state: 'saved', message: 'Availability saved. All future open time is already fixed by active schedule blocks.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   if (!schedulableTasks.length) {
@@ -447,7 +454,7 @@ async function syncScheduleFromAvailability() {
   writeSchedule(mergedSchedule);
   return {
     state: 'saved-and-optimized',
-    message: `Availability saved and schedule refreshed. ${Planner.getScheduleHealthMessage(mergedSchedule).message}`
+    message: Planner.getScheduleHealthMessage(mergedSchedule).message
   };
 }
 
@@ -511,7 +518,7 @@ document.getElementById('save-schedule').addEventListener('click', async () => {
   saveAvailability();
   const button = document.getElementById('save-schedule');
   const originalText = button.textContent;
-  setSaveFeedback('Saving availability...', 'neutral');
+  setSaveFeedback('Saving...', 'neutral');
   button.textContent = 'Saving...';
   button.disabled = true;
   button.classList.remove('bg-terracotta', 'hover:bg-[#a84b31]');
@@ -519,8 +526,8 @@ document.getElementById('save-schedule').addEventListener('click', async () => {
 
   try {
     const result = await syncScheduleFromAvailability();
-    button.textContent = result.state === 'saved-and-optimized' ? 'Saved + optimized' : 'Saved to planner';
-    setSaveFeedback(result.message, 'success');
+    button.textContent = 'Saved';
+    setSaveFeedback(getSaveFeedbackMessage(result.message, 'success'), 'success');
   } catch (error) {
     console.error('Schedule refiner optimization failed:', error);
     button.textContent = 'Saved, optimize failed';

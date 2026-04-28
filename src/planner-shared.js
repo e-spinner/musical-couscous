@@ -280,7 +280,7 @@
     if ((summary.scheduledCount || 0) > 0) {
       return {
         tone: 'success',
-        message: 'All active scheduled work currently fits before its due date.'
+        message: 'On track.'
       };
     }
     return {
