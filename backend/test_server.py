@@ -266,6 +266,42 @@ class SchedulerBackendTests(unittest.TestCase):
 
         self.assertEqual(result["schedule"][0]["id"], "high-later")
 
+    def test_scheduler_uses_priority_first_exactly_four_days_out(self):
+        blocks = [
+            parse_time_block(
+                {
+                    "start": "2026-04-28T09:00:00",
+                    "end": "2026-04-28T11:00:00",
+                }
+            )
+        ]
+        tasks = [
+            parse_task(
+                {
+                    "id": "low-earlier",
+                    "title": "Lower priority earlier task",
+                    "estimateMinutes": 60,
+                    "dueDate": "2026-05-02",
+                    "priority": "low",
+                    "cognitiveLoad": "low",
+                }
+            ),
+            parse_task(
+                {
+                    "id": "high-later",
+                    "title": "Higher priority later task",
+                    "estimateMinutes": 60,
+                    "dueDate": "2026-05-03",
+                    "priority": "high",
+                    "cognitiveLoad": "low",
+                }
+            ),
+        ]
+
+        result = schedule_tasks(blocks, tasks, now=datetime(2026, 4, 28, 8, 0))
+
+        self.assertEqual(result["schedule"][0]["id"], "high-later")
+
     def test_scheduler_prefers_in_progress_when_other_fields_match(self):
         blocks = [
             parse_time_block(
@@ -562,6 +598,131 @@ class SchedulerBackendTests(unittest.TestCase):
         self.assertEqual(len(result["schedule"]), 2)
         self.assertEqual(result["schedule"][0]["segments"][0]["start"], "2026-04-28T09:00:00")
         self.assertEqual(result["schedule"][1]["segments"][0]["start"], "2026-04-28T14:30:00")
+
+    def test_scheduler_enforces_medium_same_task_recovery_gap(self):
+        blocks = [
+            parse_time_block(
+                {
+                    "start": "2026-04-28T09:00:00",
+                    "end": "2026-04-28T10:00:00",
+                }
+            ),
+            parse_time_block(
+                {
+                    "start": "2026-04-28T11:00:00",
+                    "end": "2026-04-28T12:00:00",
+                }
+            ),
+        ]
+        tasks = [
+            parse_task(
+                {
+                    "id": "task-1",
+                    "title": "Medium load report",
+                    "estimateMinutes": 120,
+                    "dueDate": "2026-04-30",
+                    "priority": "high",
+                    "cognitiveLoad": "medium",
+                }
+            )
+        ]
+
+        result = schedule_tasks(blocks, tasks, now=datetime(2026, 4, 28, 8, 0))
+
+        self.assertEqual(result["schedule"], [])
+        self.assertEqual(result["unscheduled"][0]["missingMinutes"], 120)
+
+    def test_scheduler_allows_different_medium_load_tasks_back_to_back(self):
+        blocks = [
+            parse_time_block(
+                {
+                    "start": "2026-04-28T09:00:00",
+                    "end": "2026-04-28T10:00:00",
+                }
+            ),
+            parse_time_block(
+                {
+                    "start": "2026-04-28T10:00:00",
+                    "end": "2026-04-28T11:00:00",
+                }
+            ),
+        ]
+        tasks = [
+            parse_task(
+                {
+                    "id": "task-a",
+                    "title": "First medium task",
+                    "estimateMinutes": 60,
+                    "dueDate": "2026-04-30",
+                    "priority": "high",
+                    "cognitiveLoad": "medium",
+                }
+            ),
+            parse_task(
+                {
+                    "id": "task-b",
+                    "title": "Second medium task",
+                    "estimateMinutes": 60,
+                    "dueDate": "2026-04-30",
+                    "priority": "medium",
+                    "cognitiveLoad": "medium",
+                }
+            ),
+        ]
+
+        result = schedule_tasks(blocks, tasks, now=datetime(2026, 4, 28, 8, 0))
+
+        self.assertEqual(len(result["schedule"]), 2)
+        self.assertEqual(result["schedule"][0]["segments"][0]["start"], "2026-04-28T09:00:00")
+        self.assertEqual(result["schedule"][1]["segments"][0]["start"], "2026-04-28T10:00:00")
+
+    def test_scheduler_prefers_urgent_high_completion_over_multiple_medium_tasks(self):
+        blocks = [
+            parse_time_block(
+                {
+                    "start": "2026-04-28T09:00:00",
+                    "end": "2026-04-28T12:00:00",
+                }
+            )
+        ]
+        tasks = [
+            parse_task(
+                {
+                    "id": "urgent-high",
+                    "title": "Urgent high task",
+                    "estimateMinutes": 180,
+                    "dueDate": "2026-04-30",
+                    "priority": "high",
+                    "cognitiveLoad": "high",
+                }
+            ),
+            parse_task(
+                {
+                    "id": "medium-a",
+                    "title": "Medium task A",
+                    "estimateMinutes": 90,
+                    "dueDate": "2026-05-03",
+                    "priority": "medium",
+                    "cognitiveLoad": "medium",
+                }
+            ),
+            parse_task(
+                {
+                    "id": "medium-b",
+                    "title": "Medium task B",
+                    "estimateMinutes": 90,
+                    "dueDate": "2026-05-03",
+                    "priority": "medium",
+                    "cognitiveLoad": "medium",
+                }
+            ),
+        ]
+
+        result = schedule_tasks(blocks, tasks, now=datetime(2026, 4, 28, 8, 0))
+
+        self.assertEqual(len(result["schedule"]), 1)
+        self.assertEqual(result["schedule"][0]["id"], "urgent-high")
+        self.assertTrue(result["schedule"][0]["usedEmergencyOverload"])
 
     def test_schedule_endpoint_returns_expected_summary_and_completion_status(self):
         response = self.client.post(
