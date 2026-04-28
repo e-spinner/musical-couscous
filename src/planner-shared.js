@@ -230,6 +230,9 @@
       if (current) {
         current.completionStatus = 'incomplete';
         current.missingMinutes = task.missingMinutes;
+        current.unscheduledReasonCode = task.unscheduledReasonCode;
+        current.unscheduledReason = task.unscheduledReason;
+        current.unscheduledDetails = task.unscheduledDetails;
         current.estimateMinutes = taskMap.get(task.id)?.estimateMinutes ?? task.estimateMinutes;
         current.dueDate = taskMap.get(task.id)?.dueDate ?? task.dueDate;
         current.priority = taskMap.get(task.id)?.priority ?? task.priority;

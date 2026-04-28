@@ -355,6 +355,116 @@ def generate_task_plans(
     return sorted(plans.values(), key=sort_plan_key)
 
 
+def build_unscheduled_reason(
+    task: Task,
+    time_blocks: list[TimeBlock],
+    committed_segments: list[Segment],
+    *,
+    today: date,
+    feasible_plans: list[list[Segment]] | None = None,
+) -> dict:
+    reference = time_blocks[0].start if time_blocks else datetime.combine(task.due_date, time.min)
+    due_cutoff = task.due_cutoff_for(reference)
+
+    pre_deadline_blocks = []
+    for block in time_blocks:
+        if block.start >= due_cutoff:
+            continue
+        clipped_end = min(block.end, due_cutoff)
+        if clipped_end <= block.start:
+            continue
+        pre_deadline_blocks.append(TimeBlock(start=block.start, end=clipped_end))
+
+    total_pre_deadline_minutes = sum(block.duration_minutes for block in pre_deadline_blocks)
+    eligible_blocks = [
+        block for block in pre_deadline_blocks if block.duration_minutes >= MINIMUM_WORK_BLOCK_MINUTES
+    ]
+    free_blocks = subtract_segments_from_blocks(eligible_blocks, committed_segments) if eligible_blocks else []
+    total_free_minutes = sum(block.duration_minutes for block in free_blocks)
+
+    details = {
+        "dueCutoff": due_cutoff.isoformat(),
+        "totalPreDeadlineMinutes": total_pre_deadline_minutes,
+        "freePreDeadlineMinutes": total_free_minutes,
+        "minimumBlockMinutes": MINIMUM_WORK_BLOCK_MINUTES,
+        "stepMinutes": SCHEDULING_STEP_MINUTES,
+        "cognitiveCapMinutes": task.cognitive_cap_minutes,
+        "committedSegmentCount": len(committed_segments),
+    }
+
+    if task.estimate_minutes < MINIMUM_WORK_BLOCK_MINUTES:
+        return {
+            "code": "estimate_below_minimum_block",
+            "message": "The estimate is shorter than the minimum schedulable block.",
+            "details": details,
+        }
+
+    if task.estimate_minutes % SCHEDULING_STEP_MINUTES != 0:
+        return {
+            "code": "estimate_not_step_aligned",
+            "message": "The estimate does not align to the scheduler's 15-minute increments.",
+            "details": details,
+        }
+
+    if not can_partition_minutes(task.estimate_minutes, task.cognitive_cap_minutes):
+        return {
+            "code": "partition_rules_conflict",
+            "message": "The estimate cannot be split into valid work blocks under the current cognitive-load cap.",
+            "details": details,
+        }
+
+    if not pre_deadline_blocks or total_pre_deadline_minutes == 0:
+        return {
+            "code": "deadline_conflict",
+            "message": "There is no availability before the task's due-date cutoff.",
+            "details": details,
+        }
+
+    if not eligible_blocks:
+        return {
+            "code": "subhour_windows_only",
+            "message": "There is time before the deadline, but every available window is shorter than 60 minutes.",
+            "details": details,
+        }
+
+    if total_pre_deadline_minutes < task.estimate_minutes:
+        return {
+            "code": "not_enough_predeadline_time",
+            "message": "There are not enough total minutes available before the deadline.",
+            "details": details,
+        }
+
+    if feasible_plans:
+        return {
+            "code": "higher_value_tasks_preferred",
+            "message": "This task had valid slots, but the optimizer chose other tasks with a better overall priority and deadline fit.",
+            "details": {
+                **details,
+                "feasiblePlanCount": len(feasible_plans),
+            },
+        }
+
+    if not free_blocks:
+        return {
+            "code": "time_taken_by_other_tasks",
+            "message": "Other scheduled work consumed the viable pre-deadline windows for this task.",
+            "details": details,
+        }
+
+    if total_free_minutes < task.estimate_minutes:
+        return {
+            "code": "not_enough_remaining_time",
+            "message": "Enough time existed before the deadline overall, but not enough remained after other scheduled work was placed.",
+            "details": details,
+        }
+
+    return {
+        "code": "fragmentation_or_recovery_gap",
+        "message": "Open time exists before the deadline, but it cannot be arranged into a valid plan because of block-size, fragmentation, or recovery-gap rules.",
+        "details": details,
+    }
+
+
 def build_task_payload(task: Task, segments: list[Segment]) -> dict:
     allocated_minutes = sum(segment.allocated_minutes for segment in segments)
     missing_minutes = max(0, task.estimate_minutes - allocated_minutes)
@@ -374,8 +484,8 @@ def build_task_payload(task: Task, segments: list[Segment]) -> dict:
     return payload
 
 
-def build_incomplete_payload(task: Task) -> dict:
-    return {
+def build_incomplete_payload(task: Task, reason: dict | None = None) -> dict:
+    payload = {
         "id": task.id,
         "title": task.title,
         "estimateMinutes": task.estimate_minutes,
@@ -386,6 +496,11 @@ def build_incomplete_payload(task: Task) -> dict:
         "completionStatus": "incomplete",
         "missingMinutes": task.estimate_minutes,
     }
+    if reason:
+        payload["unscheduledReasonCode"] = reason["code"]
+        payload["unscheduledReason"] = reason["message"]
+        payload["unscheduledDetails"] = reason["details"]
+    return payload
 
 
 def task_score(task: Task, segment_count: int, fragmentation_penalty: int, *, today: date) -> int:
@@ -411,24 +526,68 @@ def task_score(task: Task, segment_count: int, fragmentation_penalty: int, *, to
     )
 
 
+def plan_score(task: Task, plan: list[Segment], *, today: date) -> tuple[int, bool]:
+    emergency_overload_used = plan_uses_emergency_overload(task, plan)
+    score = task_score(
+        task,
+        len(plan),
+        plan_fragmentation_penalty(plan),
+        today=today,
+    )
+    if emergency_overload_used:
+        score -= 25_000
+    return score, emergency_overload_used
+
+
+def committed_state_key(segments: list[Segment]) -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        sorted(
+            (
+                segment.cognitive_load,
+                segment.start.isoformat(),
+                segment.end.isoformat(),
+            )
+            for segment in segments
+        )
+    )
+
+
 def optimize_schedule(
     ordered_tasks: list[Task],
     time_blocks: list[TimeBlock],
     *,
     now: datetime,
 ) -> tuple[list[dict], list[dict]]:
+    root_plans_by_task = {
+        task.id: generate_task_plans(task, time_blocks, [], today=now.date())
+        for task in ordered_tasks
+    }
+    ordered_tasks = sorted(
+        ordered_tasks,
+        key=lambda task: (
+            len(root_plans_by_task[task.id]),
+            task.sort_score(now.date()),
+        ),
+    )
     best_result: dict[str, object] = {
         "score": float("-inf"),
         "scheduled": [],
         "unscheduled": [],
     }
     optimistic_scores = [
-        max(0, task_score(task, 1, 0, today=now.date()))
+        max(
+            0,
+            max(
+                (plan_score(task, plan, today=now.date())[0] for plan in root_plans_by_task[task.id]),
+                default=0,
+            ),
+        )
         for task in ordered_tasks
     ]
     suffix_upper_bounds = [0] * (len(ordered_tasks) + 1)
     for index in range(len(ordered_tasks) - 1, -1, -1):
         suffix_upper_bounds[index] = suffix_upper_bounds[index + 1] + optimistic_scores[index]
+    best_seen_scores: dict[tuple[int, tuple[tuple[str, str, str], ...]], int] = {}
 
     def search(
         index: int,
@@ -439,6 +598,11 @@ def optimize_schedule(
     ) -> None:
         if current_score + suffix_upper_bounds[index] < best_result["score"]:
             return
+        state_key = (index, committed_state_key(committed_segments))
+        previous_best = best_seen_scores.get(state_key)
+        if previous_best is not None and previous_best >= current_score:
+            return
+        best_seen_scores[state_key] = current_score
 
         if index >= len(ordered_tasks):
             candidate = (
@@ -459,20 +623,27 @@ def optimize_schedule(
 
         task = ordered_tasks[index]
         plans = generate_task_plans(task, time_blocks, committed_segments, today=now.date())
+        ranked_plans = sorted(
+            (
+                (
+                    *plan_score(task, plan, today=now.date()),
+                    plan_fragmentation_penalty(plan),
+                    plan,
+                )
+                for plan in plans
+            ),
+            key=lambda item: (
+                -item[0],
+                item[2],
+                len(item[3]),
+                item[3][0].start,
+            ),
+        )
 
-        for plan in plans:
-            emergency_overload_used = plan_uses_emergency_overload(task, plan)
+        for bonus, emergency_overload_used, _, plan in ranked_plans:
             payload = build_task_payload(task, plan)
             if emergency_overload_used:
                 payload["usedEmergencyOverload"] = True
-            bonus = task_score(
-                task,
-                len(plan),
-                plan_fragmentation_penalty(plan),
-                today=now.date(),
-            )
-            if emergency_overload_used:
-                bonus -= 25_000
             search(
                 index + 1,
                 committed_segments + plan,
@@ -481,11 +652,19 @@ def optimize_schedule(
                 current_score + bonus,
             )
 
+        reason = build_unscheduled_reason(
+            task,
+            time_blocks,
+            committed_segments,
+            today=now.date(),
+            feasible_plans=plans,
+        )
+
         search(
             index + 1,
             committed_segments,
             scheduled_payloads,
-            unscheduled_payloads + [build_incomplete_payload(task)],
+            unscheduled_payloads + [build_incomplete_payload(task, reason)],
             current_score,
         )
 

@@ -367,6 +367,7 @@ class SchedulerBackendTests(unittest.TestCase):
         self.assertEqual(result["schedule"], [])
         self.assertEqual(result["unscheduled"][0]["missingMinutes"], 45)
         self.assertEqual(result["unscheduled"][0]["completionStatus"], "incomplete")
+        self.assertEqual(result["unscheduled"][0]["unscheduledReasonCode"], "estimate_below_minimum_block")
 
     def test_scheduler_blocks_post_due_work(self):
         blocks = [
@@ -394,6 +395,7 @@ class SchedulerBackendTests(unittest.TestCase):
 
         self.assertEqual(result["schedule"], [])
         self.assertEqual(result["unscheduled"][0]["missingMinutes"], 60)
+        self.assertEqual(result["unscheduled"][0]["unscheduledReasonCode"], "deadline_conflict")
 
     def test_scheduler_rejects_sixty_minute_task_from_thirty_minute_slot(self):
         blocks = [
@@ -723,6 +725,9 @@ class SchedulerBackendTests(unittest.TestCase):
         self.assertEqual(len(result["schedule"]), 1)
         self.assertEqual(result["schedule"][0]["id"], "urgent-high")
         self.assertTrue(result["schedule"][0]["usedEmergencyOverload"])
+        self.assertEqual(len(result["unscheduled"]), 2)
+        self.assertEqual(result["unscheduled"][0]["unscheduledReasonCode"], "higher_value_tasks_preferred")
+        self.assertIn("optimizer chose other tasks", result["unscheduled"][0]["unscheduledReason"])
 
     def test_schedule_endpoint_returns_expected_summary_and_completion_status(self):
         response = self.client.post(
@@ -770,6 +775,8 @@ class SchedulerBackendTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["unscheduledCount"], 1)
         self.assertEqual(payload["schedule"][0]["completionStatus"], "complete")
         self.assertEqual(payload["unscheduled"][0]["completionStatus"], "incomplete")
+        self.assertIn("unscheduledReasonCode", payload["unscheduled"][0])
+        self.assertIn("unscheduledReason", payload["unscheduled"][0])
 
 
 if __name__ == "__main__":

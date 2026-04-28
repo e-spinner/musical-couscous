@@ -180,6 +180,22 @@ function formatLevel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderUnscheduledReason(task) {
+  if (!task.unscheduledReason) {
+    return '';
+  }
+  return `<p class="mt-2 text-sm text-red-900">${escapeHtml(task.unscheduledReason)}</p>`;
+}
+
 function renderScheduleHealth(scheduleData) {
   const health = Planner.getScheduleHealthMessage(scheduleData);
   dashboardScheduleHealthEl.textContent = health.message;
@@ -589,6 +605,7 @@ function renderQueue(schedule, unscheduled, tasks) {
         <p class="mt-1 text-sm text-graphite/50">${formatLevel(taskMeta?.priority || 'medium')} priority | ${formatLevel(taskMeta?.cognitiveLoad || 'medium')} load</p>
         <p class="mt-2 text-sm text-graphite/50">${formatRange(firstSegment.start, firstSegment.end)}</p>
         ${task.missingMinutes ? `<p class="mt-2 text-sm text-red-700">${task.missingMinutes} min still needs space before the deadline.</p>` : ''}
+        ${renderUnscheduledReason(task)}
       </button>
     `;
   });
@@ -602,6 +619,7 @@ function renderQueue(schedule, unscheduled, tasks) {
       <p class="mt-3 text-sm text-red-800">Due ${formatDueDate(task.dueDate)}</p>
       <p class="mt-1 text-sm text-red-700">${formatLevel(task.priority || 'medium')} priority | ${formatLevel(task.cognitiveLoad || 'medium')} load</p>
       <p class="mt-2 text-sm text-red-700">${task.missingMinutes} minutes still need space before the deadline.</p>
+      ${renderUnscheduledReason(task)}
     </button>
   `);
 

@@ -13,3 +13,5 @@ coverage/
 backend/__pycache__/
 backend/*.pyc
 backend/venv/
+builds/win-unpacked/
+builds/resources/app.asar
