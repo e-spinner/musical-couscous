@@ -22,6 +22,7 @@ const newCountEl = document.getElementById('dashboard-new-count');
 const progressCountEl = document.getElementById('dashboard-progress-count');
 const dashboardScheduleHealthEl = document.getElementById('dashboard-schedule-health');
 const dashboardDeveloperToolsEl = document.getElementById('dashboard-developer-tools');
+const dashboardSolverMetaEl = document.getElementById('dashboard-solver-meta');
 const showTimelineBtn = document.getElementById('show-timeline');
 const showCalendarBtn = document.getElementById('show-calendar');
 const timelineDayLabel = document.getElementById('timeline-day-label');
@@ -477,6 +478,15 @@ function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) 
   return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff, deriveAvailabilityBlocks().openBlocks);
 }
 
+function formatSolverMeta(scheduleData) {
+  const solver = scheduleData?.meta?.solver;
+  const elapsedMs = scheduleData?.meta?.elapsedMs;
+  if (!solver || typeof elapsedMs !== 'number') {
+    return 'No solver timing yet';
+  }
+  return `${solver} ${elapsedMs.toFixed(elapsedMs < 10 ? 2 : 1)} ms`;
+}
+
 async function syncSchedule(taskList) {
   const timeBlocks = deriveAvailabilityBlocks().openBlocks;
   const previousSchedule = readSchedule();
@@ -764,6 +774,9 @@ function renderDashboard() {
   newCountEl.textContent = String(tasks.filter((task) => task.status === 'new').length);
   progressCountEl.textContent = String(tasks.filter((task) => task.status === 'in_progress').length);
   dateLabel.textContent = today.toLocaleDateString('en-US', dateOptions);
+  if (dashboardSolverMetaEl) {
+    dashboardSolverMetaEl.textContent = formatSolverMeta(scheduleData);
+  }
   updateTimelineDayLabel();
 
   renderPulse(scheduleData, actualTodaySegments);
@@ -916,6 +929,11 @@ addTaskBtn.addEventListener('click', async () => {
 
   if (!title || !dueDate || !estimate) {
     quickAddFeedback.textContent = 'Add a title, estimate, and due date.';
+    return;
+  }
+  const estimateValidationMessage = Planner.getTaskEstimateValidationMessage(estimate, cognitiveLoad, dueDate);
+  if (estimateValidationMessage) {
+    quickAddFeedback.textContent = estimateValidationMessage;
     return;
   }
   if (!activeTaskId && status === 'completed') {

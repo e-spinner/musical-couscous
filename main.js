@@ -16,8 +16,11 @@ function getBackendLaunchConfig() {
   if (app.isPackaged) {
     const packagedBackendName = getPackagedBackendBasename();
     const packagedCandidates = [
+      path.join(process.resourcesPath, 'backend', 'architecture-backend', packagedBackendName),
       path.join(process.resourcesPath, 'backend', packagedBackendName),
+      path.join(path.dirname(process.execPath), 'resources', 'backend', 'architecture-backend', packagedBackendName),
       path.join(path.dirname(process.execPath), 'resources', 'backend', packagedBackendName),
+      path.join(path.dirname(process.execPath), 'backend', 'architecture-backend', packagedBackendName),
       path.join(path.dirname(process.execPath), 'backend', packagedBackendName)
     ];
     const packagedBackendPath = packagedCandidates.find((candidate) => fs.existsSync(candidate));
@@ -71,6 +74,15 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'src', 'Dashboard.html'));
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log(`[renderer] loaded ${mainWindow.webContents.getURL()}`);
+  });
+
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const levelLabel = ['log', 'warn', 'error', 'info'][level] || String(level);
+    console.log(`[renderer:${levelLabel}] ${message} (${sourceId}:${line})`);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
