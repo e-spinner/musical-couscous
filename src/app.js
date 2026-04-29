@@ -1,4 +1,5 @@
 const API_BASE_URL = 'http://127.0.0.1:5050';
+const API_TIMEOUT_MS = 15000;
 const STORAGE_KEYS = {
   availability: 'architectureAvailability',
   tasks: 'architectureTasks',
@@ -10,12 +11,18 @@ const taskListRoot = document.getElementById('task-list');
 const feedbackEl = document.getElementById('feedback');
 const healthIndicator = document.getElementById('health-indicator');
 const planMeta = document.getElementById('plan-meta');
+const planRuntime = document.getElementById('plan-runtime');
 const availabilityNote = document.getElementById('availability-note');
 const debugResetBtn = document.getElementById('debug-reset');
+const debugForceReoptimizeBtn = document.getElementById('debug-force-reoptimize');
+const debugRandomTaskBtn = document.getElementById('debug-random-task');
+const debugExportBundleBtn = document.getElementById('debug-export-bundle');
+const developerToolsEl = document.getElementById('developer-tools');
 const availableHoursEl = document.getElementById('summary-available-hours');
 const taskCountEl = document.getElementById('summary-task-count');
 const scheduledCountEl = document.getElementById('summary-scheduled-count');
 const completedCountEl = document.getElementById('summary-completed-count');
+const scheduleHealthEl = document.getElementById('summary-schedule-health');
 const taskModal = document.getElementById('task-modal');
 const taskModalTitle = document.getElementById('task-modal-title');
 const closeTaskModalBtn = document.getElementById('close-task-modal');
@@ -47,48 +54,93 @@ const STATUS_META = {
     tone: 'border-graphite/10 bg-graphite/5 text-graphite/65'
   }
 };
-const DEFAULT_TASKS = [
-  {
-    id: crypto.randomUUID(),
-    title: 'Site analysis package',
-    estimateMinutes: 180,
-    dueDate: '2026-04-17',
-    status: 'new',
-    priority: 'high',
-    cognitiveLoad: 'high',
-    notes: ''
-  },
-  {
-    id: crypto.randomUUID(),
-    title: 'Zoning research summary',
-    estimateMinutes: 120,
-    dueDate: '2026-04-19',
-    status: 'in_progress',
-    priority: 'medium',
-    cognitiveLoad: 'medium',
-    notes: ''
-  },
-  {
-    id: crypto.randomUUID(),
-    title: 'Concept sketch revisions',
-    estimateMinutes: 90,
-    dueDate: '2026-04-21',
-    status: 'new',
-    priority: 'high',
-    cognitiveLoad: 'low',
-    notes: ''
-  }
-];
-
 let tasks = pruneCompletedTasks(loadTasks());
 let autoGenerateTimer = null;
 let isGenerating = false;
 let activeTaskId = null;
 
+const BASE_RANDOM_TASK_TEMPLATES = [
+  { title: 'Facade precedent matrix', estimateMinutes: 180 },
+  { title: 'Stair core compliance review', estimateMinutes: 120 },
+  { title: 'Lighting study revision', estimateMinutes: 135 },
+  { title: 'Model export cleanup', estimateMinutes: 90 },
+  { title: 'Material palette captions', estimateMinutes: 75 },
+  { title: 'Envelope section redraw', estimateMinutes: 150 },
+  { title: 'Accessibility markup pass', estimateMinutes: 105 },
+  { title: 'Render board sequencing', estimateMinutes: 165 }
+];
+
+function formatLocalDateOffset(daysFromToday) {
+  const nextDate = new Date();
+  nextDate.setHours(0, 0, 0, 0);
+  nextDate.setDate(nextDate.getDate() + daysFromToday);
+  return nextDate.toISOString().slice(0, 10);
+}
+
+function createDefaultTasks() {
+  return [
+    {
+      id: crypto.randomUUID(),
+      title: 'Site analysis package',
+      estimateMinutes: 180,
+      dueDate: formatLocalDateOffset(2),
+      status: 'new',
+      priority: 'high',
+      cognitiveLoad: 'high',
+      notes: ''
+    },
+    {
+      id: crypto.randomUUID(),
+      title: 'Zoning research summary',
+      estimateMinutes: 120,
+      dueDate: formatLocalDateOffset(4),
+      status: 'in_progress',
+      priority: 'medium',
+      cognitiveLoad: 'medium',
+      notes: ''
+    },
+    {
+      id: crypto.randomUUID(),
+      title: 'Concept sketch revisions',
+      estimateMinutes: 90,
+      dueDate: formatLocalDateOffset(6),
+      status: 'new',
+      priority: 'high',
+      cognitiveLoad: 'low',
+      notes: ''
+    }
+  ];
+}
+
+function buildRandomDeveloperTask() {
+  const template = BASE_RANDOM_TASK_TEMPLATES[Math.floor(Math.random() * BASE_RANDOM_TASK_TEMPLATES.length)];
+  const variationSteps = [-30, -15, 0, 15, 30, 45];
+  const dueOffsetDays = [1, 2, 3, 4, 5, 6, 7, 9][Math.floor(Math.random() * 8)];
+  const priority = ['high', 'medium', 'low'][Math.floor(Math.random() * 3)];
+  const cognitiveLoad = ['high', 'medium', 'low'][Math.floor(Math.random() * 3)];
+  const status = Math.random() < 0.35 ? 'in_progress' : 'new';
+  let estimateMinutes = Math.max(60, template.estimateMinutes + variationSteps[Math.floor(Math.random() * variationSteps.length)]);
+
+  while (!Planner.canPartitionTaskEstimate(estimateMinutes, cognitiveLoad, formatLocalDateOffset(dueOffsetDays)) && estimateMinutes < 20160) {
+    estimateMinutes += 15;
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    title: `${template.title} ${Math.floor(Math.random() * 90 + 10)}`,
+    estimateMinutes,
+    dueDate: formatLocalDateOffset(dueOffsetDays),
+    status,
+    priority,
+    cognitiveLoad,
+    notes: 'Developer seeded task for complex schedule testing.'
+  };
+}
+
 function loadTasks() {
   const raw = window.localStorage.getItem(STORAGE_KEYS.tasks);
   if (!raw) {
-    return DEFAULT_TASKS;
+    return createDefaultTasks();
   }
 
   try {
@@ -101,14 +153,26 @@ function loadTasks() {
           notes: '',
           ...task
         }))
-      : DEFAULT_TASKS;
+      : createDefaultTasks();
   } catch (error) {
-    return DEFAULT_TASKS;
+    return createDefaultTasks();
   }
 }
 
 function saveTasks() {
   window.localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function readLastSchedule() {
@@ -126,6 +190,10 @@ function readLastSchedule() {
 
 function writeLastSchedule(schedule) {
   window.localStorage.setItem(STORAGE_KEYS.lastSchedule, JSON.stringify(schedule));
+}
+
+function buildExportStamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 function pruneCompletedTasks(taskList) {
@@ -237,8 +305,8 @@ function updateAvailabilitySummary() {
 
   availableHoursEl.textContent = `${(totalMinutes / 60).toFixed(totalMinutes % 60 === 0 ? 0 : 1)}h`;
   availabilityNote.textContent = timeBlocks.length
-    ? `${timeBlocks.length} future availability blocks are ready. Optimization runs automatically in the background.`
-    : 'No saved availability yet. Mark time in Schedule Refiner first.';
+    ? `${timeBlocks.length} future block${timeBlocks.length === 1 ? '' : 's'} ready.`
+    : 'No availability saved yet.';
 }
 
 function renderTasks() {
@@ -295,6 +363,34 @@ function renderTasks() {
   saveTasks();
 }
 
+function renderScheduleHealth(payload) {
+  const health = Planner.getScheduleHealthMessage(payload);
+  scheduleHealthEl.textContent = health.message;
+  scheduleHealthEl.classList.remove(
+    'hidden',
+    'border-red-300/40',
+    'bg-red-50/10',
+    'text-red-100',
+    'border-olive/20',
+    'bg-olive/10',
+    'text-cream',
+    'border-white/10',
+    'bg-white/5',
+    'text-cream/75'
+  );
+
+  if (health.tone === 'warning') {
+    scheduleHealthEl.classList.add('border-red-300/40', 'bg-red-50/10', 'text-red-100');
+    return;
+  }
+  if (health.tone === 'success') {
+    scheduleHealthEl.classList.add('border-olive/20', 'bg-olive/10', 'text-cream');
+    return;
+  }
+
+  scheduleHealthEl.classList.add('border-white/10', 'bg-white/5', 'text-cream/75');
+}
+
 function formatLevel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -306,9 +402,47 @@ function formatDateOnly(isoString) {
   }).format(parseDueDateStart(isoString));
 }
 
+function ensureStatusOptions(selectEl, includeCompleted) {
+  const completedOption = selectEl.querySelector('option[value="completed"]');
+  if (includeCompleted) {
+    if (!completedOption) {
+      const option = document.createElement('option');
+      option.value = 'completed';
+      option.textContent = 'Completed';
+      selectEl.appendChild(option);
+    }
+    return;
+  }
+  if (completedOption) {
+    completedOption.remove();
+  }
+  if (selectEl.value === 'completed') {
+    selectEl.value = 'new';
+  }
+}
+
+function readAvailabilityRaw() {
+  const raw = window.localStorage.getItem(STORAGE_KEYS.availability);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function setDeveloperVisibility(isVisible) {
+  developerToolsEl.classList.toggle('hidden', !isVisible);
+  developerToolsEl.classList.toggle('flex', isVisible);
+}
+
 function openTaskModal(task = null) {
   const isNewTask = !task;
   activeTaskId = task?.id || null;
+  ensureStatusOptions(modalTaskStatus, !isNewTask);
   taskModalTitle.textContent = isNewTask ? 'Add Task' : 'Edit Task';
   modalTaskTitle.value = task?.title || '';
   modalTaskEstimate.value = String(task?.estimateMinutes || 60);
@@ -351,17 +485,45 @@ function bindEvents() {
     tasks = tasks.filter((task) => task.status !== 'completed');
     saveTasks();
     renderTasks();
-    scheduleAutoOptimization('Completed tasks cleared. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   debugResetBtn.addEventListener('click', () => {
     tasks = [];
-    window.localStorage.removeItem(STORAGE_KEYS.tasks);
+    saveTasks();
     window.localStorage.removeItem(STORAGE_KEYS.lastSchedule);
     renderTasks();
     updateScheduleSummary(null);
     hideFeedback();
-    planMeta.textContent = 'Planner reset for debugging';
+    planMeta.textContent = 'Reset';
+  });
+
+  debugRandomTaskBtn.addEventListener('click', () => {
+    tasks.push(buildRandomDeveloperTask());
+    saveTasks();
+    renderTasks();
+    scheduleAutoOptimization('Updating...');
+  });
+
+  debugForceReoptimizeBtn.addEventListener('click', () => {
+    forceReoptimize();
+  });
+
+  debugExportBundleBtn.addEventListener('click', () => {
+    const requestPayload = buildScheduleRequestPayload();
+    downloadJsonFile(`architecture-debug-bundle-${buildExportStamp()}.json`, {
+      exportedAt: new Date().toISOString(),
+      availability: readAvailabilityRaw(),
+      schedule: readLastSchedule(),
+      tasks,
+      scheduleRequest: {
+        cutoff: requestPayload.cutoff.toISOString(),
+        availableBlocks: requestPayload.availableBlocks,
+        schedulableTasks: requestPayload.schedulableTasks,
+        request: requestPayload.request
+      }
+    });
+    showFeedback('Debug bundle exported for troubleshooting.', 'success');
   });
 
   closeTaskModalBtn.addEventListener('click', closeTaskModal);
@@ -377,9 +539,22 @@ function bindEvents() {
       taskModalFeedback.textContent = 'Add a title, estimate, and due date.';
       return;
     }
-      if (estimateMinutes < 0 || estimateMinutes > 20160) {
-          taskModalFeedback.textContent = 'Estimate must be 0 to 2 weeks.';
-          return;
+    if (nextTask.estimateMinutes <= 0 || nextTask.estimateMinutes > 20160) {
+      taskModalFeedback.textContent = 'Estimate must be between 15 minutes and 2 weeks.';
+      return;
+    }
+    const estimateValidationMessage = Planner.getTaskEstimateValidationMessage(
+      nextTask.estimateMinutes,
+      nextTask.cognitiveLoad,
+      nextTask.dueDate
+    );
+    if (estimateValidationMessage) {
+      taskModalFeedback.textContent = estimateValidationMessage;
+      return;
+    }
+    if (!activeTaskId && nextTask.status === 'completed') {
+      taskModalFeedback.textContent = 'New tasks cannot start as completed.';
+      return;
     }
 
     if (activeTaskId) {
@@ -388,9 +563,10 @@ function bindEvents() {
           ? { ...task, ...nextTask }
           : task
       ));
+      saveTasks();
       closeTaskModal();
       renderTasks();
-      scheduleAutoOptimization('Task updated. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
       return;
     }
 
@@ -398,9 +574,10 @@ function bindEvents() {
       id: crypto.randomUUID(),
       ...nextTask
     });
+    saveTasks();
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task added. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   deleteTaskBtn.addEventListener('click', () => {
@@ -408,9 +585,10 @@ function bindEvents() {
       return;
     }
     tasks = tasks.filter((task) => task.id !== activeTaskId);
+    saveTasks();
     closeTaskModal();
     renderTasks();
-    scheduleAutoOptimization('Task removed. Optimizing in the background...');
+    scheduleAutoOptimization('Updating...');
   });
 
   document.addEventListener('click', (event) => {
@@ -426,33 +604,113 @@ function bindEvents() {
   window.addEventListener('storage', (event) => {
     if (event.key === STORAGE_KEYS.availability) {
       updateAvailabilitySummary();
-      scheduleAutoOptimization('Availability changed. Optimizing in the background...');
+      scheduleAutoOptimization('Updating...');
     }
     if (event.key === STORAGE_KEYS.tasks) {
       tasks = pruneCompletedTasks(loadTasks());
       renderTasks();
-      updateScheduleSummary(readLastSchedule());
+      scheduleAutoOptimization('Updating...');
     }
+    if (event.key === STORAGE_KEYS.lastSchedule) {
+      const latestSchedule = readLastSchedule();
+      updateScheduleSummary(latestSchedule);
+      renderScheduleHealth(latestSchedule);
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Shift') {
+      setDeveloperVisibility(true);
+    }
+  });
+
+  document.addEventListener('keyup', (event) => {
+    if (event.key === 'Shift') {
+      setDeveloperVisibility(false);
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    setDeveloperVisibility(false);
   });
 }
 
 async function checkHealth() {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`);
+    console.info('[tasks] checking backend health', { url: `${API_BASE_URL}/health` });
+    const response = await fetchWithTimeout(`${API_BASE_URL}/health`);
     if (!response.ok) {
       throw new Error('Backend unavailable');
     }
+    console.info('[tasks] backend health connected');
 
-    healthIndicator.textContent = 'Running';
+    healthIndicator.textContent = 'Connected';
     healthIndicator.className = 'rounded-full border border-olive/20 bg-olive/10 px-3 py-1 text-sm text-olive';
   } catch (error) {
+    console.error('[tasks] backend health failed', error);
     healthIndicator.textContent = 'Offline';
     healthIndicator.className = 'rounded-full border border-red-300/40 bg-red-50 px-3 py-1 text-sm text-red-700';
     window.setTimeout(checkHealth, 1500);
   }
 }
 
-function scheduleAutoOptimization(message = 'Optimizing in the background...') {
+async function fetchWithTimeout(url, options = {}, timeoutMs = API_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('Backend request timed out.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function readApiResponse(response) {
+  const rawText = await response.text();
+  let payload = null;
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch (error) {
+      if (response.ok) {
+        throw new Error(`Backend returned invalid JSON (${response.status} ${response.statusText}).`);
+      }
+
+      const excerpt = rawText.replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(
+        excerpt
+          ? `Backend error ${response.status} ${response.statusText}: ${excerpt}`
+          : `Backend error ${response.status} ${response.statusText}.`
+      );
+    }
+  }
+
+  if (!response.ok) {
+    const backendMessage = payload?.error || payload?.message;
+    throw new Error(
+      backendMessage
+        ? `Backend error ${response.status}: ${backendMessage}`
+        : `Backend error ${response.status} ${response.statusText}.`
+    );
+  }
+
+  if (!payload) {
+    throw new Error('Backend returned an empty response.');
+  }
+
+  return payload;
+}
+
+function scheduleAutoOptimization(message = 'Updating...') {
   if (autoGenerateTimer) {
     window.clearTimeout(autoGenerateTimer);
   }
@@ -462,12 +720,20 @@ function scheduleAutoOptimization(message = 'Optimizing in the background...') {
   }, 500);
 }
 
-async function generatePlan(isBackgroundRun = false) {
+function forceReoptimize(message = 'Re-optimizing...') {
+  if (autoGenerateTimer) {
+    window.clearTimeout(autoGenerateTimer);
+    autoGenerateTimer = null;
+  }
   if (isGenerating) {
+    showFeedback('A schedule run is already in progress.', 'error');
     return;
   }
+  planMeta.textContent = message;
+  generatePlan(false);
+}
 
-  hideFeedback();
+function buildScheduleRequestPayload() {
   const timeBlocks = deriveTimeBlocks();
   const cutoff = getNextHalfHour();
   const previousSchedule = readLastSchedule();
@@ -477,74 +743,99 @@ async function generatePlan(isBackgroundRun = false) {
   const availableBlocks = subtractSegmentsFromBlocks(timeBlocks, fixedSegments);
   const schedulableTasks = buildSchedulingTasks(tasks, previousSchedule, cutoff);
 
+  return {
+    cutoff,
+    previousSchedule,
+    availableBlocks,
+    schedulableTasks,
+    request: {
+      timeBlocks: availableBlocks.map((block) => ({
+        start: block.start,
+        end: block.end
+      })),
+      tasks: schedulableTasks
+    }
+  };
+}
+
+async function generatePlan(isBackgroundRun = false) {
+  if (isGenerating) {
+    return;
+  }
+
+  hideFeedback();
+  const { cutoff, previousSchedule, availableBlocks, schedulableTasks, request } = buildScheduleRequestPayload();
+
   if (!availableBlocks.length) {
-    planMeta.textContent = 'Waiting for availability';
+    planMeta.textContent = 'No availability';
     updateScheduleSummary(previousSchedule);
+    renderScheduleHealth(previousSchedule);
     if (!isBackgroundRun) {
-      showFeedback('No availability found. Save time in Schedule Refiner first.', 'error');
+      showFeedback('No availability found.', 'error');
     }
     return;
   }
 
   if (!schedulableTasks.length) {
-    const emptySchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff);
-    writeLastSchedule({
-      summary: {
-        timeBlockCount: availableBlocks.length,
-        taskCount: 0,
-        scheduledCount: emptySchedule.schedule.length,
-        unscheduledCount: 0,
-        totalAvailableMinutes: availableBlocks.reduce(
-          (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
-          0
-        ),
-        totalPlannedMinutes: 0
-      },
-      schedule: emptySchedule.schedule,
-      unscheduled: []
-    });
-    updateScheduleSummary(readLastSchedule());
-    planMeta.textContent = 'No remaining tasks to optimize';
+    const mergedSchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff, availableBlocks);
+    writeLastSchedule(mergedSchedule);
+    updateScheduleSummary(mergedSchedule);
+    renderScheduleHealth(mergedSchedule);
+    planMeta.textContent = 'Up to date';
     if (!isBackgroundRun) {
-      showFeedback('Nothing new needs scheduling right now.', 'success');
+      showFeedback('Nothing new to schedule.', 'success');
     }
     return;
   }
 
   isGenerating = true;
-  planMeta.textContent = 'Optimizing now...';
+  planMeta.textContent = 'Updating...';
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/schedule`, {
+    console.info('[tasks] schedule request starting', {
+      availableBlockCount: availableBlocks.length,
+      schedulableTaskCount: schedulableTasks.length,
+      request
+    });
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/schedule`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        timeBlocks: availableBlocks.map((block) => ({
-          start: block.start,
-          end: block.end
-        })),
-        tasks: schedulableTasks
-      })
+      body: JSON.stringify(request)
     });
 
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || 'Unable to generate a schedule.');
-    }
+    const payload = await readApiResponse(response);
+    console.info('[tasks] schedule request finished', {
+      scheduledCount: payload.summary?.scheduledCount,
+      unscheduledCount: payload.summary?.unscheduledCount,
+      solver: payload.meta?.solver,
+      elapsedMs: payload.meta?.elapsedMs
+    });
 
-    const mergedSchedule = mergeScheduleHistory(previousSchedule, payload, tasks, cutoff);
+    const mergedSchedule = mergeScheduleHistory(previousSchedule, payload, tasks, cutoff, availableBlocks);
     writeLastSchedule(mergedSchedule);
     updateScheduleSummary(mergedSchedule);
-    planMeta.textContent = 'Plan synced in the background';
+    renderScheduleHealth(mergedSchedule);
+    const statusText = mergedSchedule.summary?.incompleteCount
+      ? 'Needs attention'
+      : 'Up to date';
+    const solverMeta = formatSolverMeta(mergedSchedule);
+    planMeta.textContent = solverMeta ? `${statusText} - ${solverMeta}` : statusText;
     if (!isBackgroundRun) {
-      showFeedback('Schedule updated.', 'success');
+      showFeedback(
+        mergedSchedule.summary?.incompleteCount
+          ? `Updated. Some tasks still miss their deadlines.${solverMeta ? ` ${solverMeta}.` : ''}`
+          : `Updated.${solverMeta ? ` ${solverMeta}.` : ''}`,
+        mergedSchedule.summary?.incompleteCount ? 'error' : 'success'
+      );
     }
   } catch (error) {
-    planMeta.textContent = 'Optimization paused';
+    const message = error instanceof Error ? error.message : 'Unknown scheduling error.';
+    console.error('[tasks] schedule request failed', error);
+    planMeta.textContent = message;
     console.error('Background optimization failed:', error);
-    showFeedback(error.message, 'error');
+    showFeedback(message, 'error');
   } finally {
     isGenerating = false;
   }
@@ -558,14 +849,36 @@ function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) 
   return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff);
 }
 
+function formatSolverMeta(scheduleData) {
+  const solver = scheduleData?.meta?.solver;
+  const elapsedMs = scheduleData?.meta?.elapsedMs;
+  if (!solver || typeof elapsedMs !== 'number') {
+    return '';
+  }
+  return `${solver} in ${elapsedMs.toFixed(elapsedMs < 10 ? 2 : 1)} ms`;
+}
+
+function updatePlanRuntime(scheduleData) {
+  if (!planRuntime) {
+    return;
+  }
+
+  const solverMeta = formatSolverMeta(scheduleData);
+  planRuntime.textContent = solverMeta ? `Last search time: ${solverMeta}` : 'No recent search time.';
+}
+
 function updateScheduleSummary(payload) {
   const summary = payload?.summary;
   if (!summary) {
     scheduledCountEl.textContent = '0';
+    renderScheduleHealth(null);
+    updatePlanRuntime(null);
     return;
   }
 
   scheduledCountEl.textContent = String(summary.scheduledCount || 0);
+  renderScheduleHealth(payload);
+  updatePlanRuntime(payload);
 }
 
 function showFeedback(message, tone) {
@@ -584,9 +897,9 @@ function hideFeedback() {
 
 tasks = pruneCompletedTasks(tasks);
 saveTasks();
+setDeveloperVisibility(false);
 renderTasks();
 bindEvents();
 checkHealth();
 updateAvailabilitySummary();
 updateScheduleSummary(readLastSchedule());
-scheduleAutoOptimization();

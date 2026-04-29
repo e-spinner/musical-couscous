@@ -37,6 +37,10 @@ const calendarContainer = document.getElementById('calendar-container');
 const btn14Day = document.getElementById('tab-14day');
 const btnRoutine = document.getElementById('tab-routine');
 const legend = document.getElementById('legend');
+const specificWindowsReminder = document.getElementById('specific-windows-reminder');
+const specificWindowsReminderText = document.getElementById('specific-windows-reminder-text');
+const dismissSpecificWindowsReminderBtn = document.getElementById('dismiss-specific-windows-reminder');
+const SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY = 'architectureSpecificWindowsReminderDismissedSession';
 
 let isPainting = false;
 let isBoxSelecting = false;
@@ -77,6 +81,29 @@ function updateLegend() {
   `;
 }
 
+function updateSpecificWindowsReminder() {
+  if (activeTab !== '14-day') {
+    specificWindowsReminder.classList.add('hidden');
+    return;
+  }
+
+  const reminders = Planner.getSpecificWindowsReminderMessages({ schedule14 });
+
+  if (!reminders.length) {
+    specificWindowsReminder.classList.add('hidden');
+    window.sessionStorage.removeItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY);
+    return;
+  }
+
+  if (window.sessionStorage.getItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY) === 'true') {
+    specificWindowsReminder.classList.add('hidden');
+    return;
+  }
+
+  specificWindowsReminderText.textContent = `${reminders.join(' ')} Add week-specific overrides if those days differ from the routine template.`;
+  specificWindowsReminder.classList.remove('hidden');
+}
+
 function updateCellVisual(cell, isSpecificBlocked, isRoutineBlocked, isRoutineTab) {
   cell.style.backgroundColor = '';
 
@@ -97,6 +124,9 @@ function updateCellVisual(cell, isSpecificBlocked, isRoutineBlocked, isRoutineTa
 function createGrid(startIndex, numCols, titleText, isRoutineTab) {
   const wrapper = document.createElement('section');
   wrapper.className = 'module-card overflow-hidden rounded-[1.75rem]';
+  wrapper.title = isRoutineTab
+    ? 'Drag to mark blocked time in the weekly routine. Hold Shift while dragging to box select.'
+    : 'Drag to mark blocked time for this week. Hold Shift while dragging to box select.';
 
   const header = document.createElement('div');
   header.className = 'border-b border-graphite/10 bg-cream/80 px-5 py-4';
@@ -223,6 +253,7 @@ function updateBoxVisuals(isRoutineTab) {
 
 function renderCalendar() {
   updateLegend();
+  updateSpecificWindowsReminder();
   calendarContainer.innerHTML = '';
   cellDOMNodes = Array.from({ length: 14 }, () => []);
 
@@ -232,9 +263,6 @@ function renderCalendar() {
   }
 
   calendarContainer.appendChild(createGrid(0, 7, 'Week 1', false));
-  const divider = document.createElement('div');
-  divider.className = 'mx-1 h-5 rounded-full bg-[linear-gradient(90deg,rgba(191,91,61,0.18),rgba(106,122,84,0.18))]';
-  calendarContainer.appendChild(divider);
   calendarContainer.appendChild(createGrid(7, 7, 'Week 2', false));
 }
 
@@ -308,6 +336,13 @@ function setSaveFeedback(message, tone = 'neutral') {
   saveFeedback.classList.add('text-cream/70');
 }
 
+function getSaveFeedbackMessage(message, tone) {
+  if (tone === 'success' && message === 'On track.') {
+    return '';
+  }
+  return message;
+}
+
 function getNextHalfHour() {
   return Planner.getNextHalfHour();
 }
@@ -367,18 +402,27 @@ function buildSchedulingTasks(taskList, previousSchedule, cutoff) {
 }
 
 function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) {
-  return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff);
+  return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff, deriveOpenBlocks());
+}
+
+function formatSolverMeta(scheduleData) {
+  const solver = scheduleData?.meta?.solver || 'scheduler';
+  const elapsedMs = scheduleData?.meta?.elapsedMs;
+  if (typeof elapsedMs !== 'number') {
+    return solver;
+  }
+  return `${solver} ${elapsedMs.toFixed(elapsedMs < 10 ? 2 : 1)} ms`;
 }
 
 async function syncScheduleFromAvailability() {
   const tasks = readTasks();
   if (!tasks.length) {
-    return { state: 'saved', message: 'Availability saved. No tasks to optimize yet.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   const timeBlocks = deriveOpenBlocks();
   if (!timeBlocks.length) {
-    return { state: 'saved', message: 'Availability saved. There are no future open blocks yet.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   const previousSchedule = readSchedule();
@@ -390,27 +434,13 @@ async function syncScheduleFromAvailability() {
   const schedulableTasks = buildSchedulingTasks(tasks, previousSchedule, cutoff);
 
   if (!availableBlocks.length) {
-    return { state: 'saved', message: 'Availability saved. All future open time is already fixed by active schedule blocks.' };
+    return { state: 'saved', message: 'Saved.' };
   }
 
   if (!schedulableTasks.length) {
-    const mergedSchedule = mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff);
-    writeSchedule({
-      summary: {
-        timeBlockCount: availableBlocks.length,
-        taskCount: 0,
-        scheduledCount: mergedSchedule.schedule.length,
-        unscheduledCount: 0,
-        totalAvailableMinutes: availableBlocks.reduce(
-          (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
-          0
-        ),
-        totalPlannedMinutes: 0
-      },
-      schedule: mergedSchedule.schedule,
-      unscheduled: []
-    });
-    return { state: 'saved', message: 'Availability saved. Nothing new needs scheduling right now.' };
+    const mergedSchedule = Planner.mergeScheduleHistory(previousSchedule, { summary: null, schedule: [], unscheduled: [] }, tasks, cutoff, availableBlocks);
+    writeSchedule(mergedSchedule);
+    return { state: 'saved', message: Planner.getScheduleHealthMessage(mergedSchedule).message };
   }
 
   const response = await fetch(`${API_BASE_URL}/api/schedule`, {
@@ -429,8 +459,12 @@ async function syncScheduleFromAvailability() {
     throw new Error(payload.error || 'Unable to update schedule.');
   }
 
-  writeSchedule(mergeScheduleHistory(previousSchedule, payload, tasks, cutoff));
-  return { state: 'saved-and-optimized', message: 'Availability saved and schedule refreshed.' };
+  const mergedSchedule = Planner.mergeScheduleHistory(previousSchedule, payload, tasks, cutoff, availableBlocks);
+  writeSchedule(mergedSchedule);
+  return {
+    state: 'saved-and-optimized',
+    message: `${Planner.getScheduleHealthMessage(mergedSchedule).message} (${formatSolverMeta(mergedSchedule)})`
+  };
 }
 
 btn14Day.addEventListener('click', () => {
@@ -445,6 +479,11 @@ btnRoutine.addEventListener('click', () => {
   btnRoutine.className = 'rounded-full bg-white px-5 py-3 text-sm font-bold text-graphite shadow';
   btn14Day.className = 'rounded-full px-5 py-3 text-sm font-bold text-graphite/60 transition hover:bg-white/50';
   renderCalendar();
+});
+
+dismissSpecificWindowsReminderBtn.addEventListener('click', () => {
+  window.sessionStorage.setItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY, 'true');
+  specificWindowsReminder.classList.add('hidden');
 });
 
 document.addEventListener('mouseup', () => {
@@ -473,6 +512,8 @@ document.addEventListener('mouseup', () => {
 
   if (hadPaintInteraction) {
     saveAvailability();
+    window.sessionStorage.removeItem(SPECIFIC_WINDOWS_REMINDER_DISMISSED_KEY);
+    updateSpecificWindowsReminder();
   }
 
   isPainting = false;
@@ -486,7 +527,7 @@ document.getElementById('save-schedule').addEventListener('click', async () => {
   saveAvailability();
   const button = document.getElementById('save-schedule');
   const originalText = button.textContent;
-  setSaveFeedback('Saving availability...', 'neutral');
+  setSaveFeedback('Saving...', 'neutral');
   button.textContent = 'Saving...';
   button.disabled = true;
   button.classList.remove('bg-terracotta', 'hover:bg-[#a84b31]');
@@ -494,8 +535,8 @@ document.getElementById('save-schedule').addEventListener('click', async () => {
 
   try {
     const result = await syncScheduleFromAvailability();
-    button.textContent = result.state === 'saved-and-optimized' ? 'Saved + optimized' : 'Saved to planner';
-    setSaveFeedback(result.message, 'success');
+    button.textContent = 'Saved';
+    setSaveFeedback(getSaveFeedbackMessage(result.message, 'success'), 'success');
   } catch (error) {
     console.error('Schedule refiner optimization failed:', error);
     button.textContent = 'Saved, optimize failed';

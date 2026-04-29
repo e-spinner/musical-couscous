@@ -143,6 +143,10 @@ These rules are mandatory. A schedule that breaks any of them should be treated 
 - `medium` cognitive load: maximum continuous segment length is `120 minutes`.
 - `low` cognitive load: maximum continuous segment length is `180 minutes`.
 - No task segment may exceed the cap defined by that task's `cognitiveLoad`.
+- Emergency overload exception:
+- if a task is due within the next `2 days`, the scheduler may temporarily override the normal cognitive-load maximum continuous time
+- this near-deadline overload rule is intended to protect urgent work from being blocked by otherwise-valid cap limits
+- the `60-minute` minimum segment length and `15-minute` alignment rules still apply during overload scheduling
 
 ### Cognitive Load Recovery Gaps
 
@@ -227,6 +231,13 @@ These rules should influence optimization and ranking, but can be relaxed if req
 - If not all tasks can be completed, prefer not to finish the longest low-priority item first.
 - More generally, lower-priority and longer tasks should be the first candidates to remain incomplete when a full solution is impossible.
 
+### Urgent High-Priority Completion Preference
+
+- If an urgent `high` priority task can still be completed before its deadline, the scheduler should strongly prefer completing it over finishing multiple lower-priority tasks.
+- This is especially important when a `high` priority task is near its deadline and medium-priority tasks would otherwise consume the remaining valid time.
+- The optimizer should treat successful completion of urgent `high` priority work as more valuable than completing a larger number of less important tasks.
+- Emergency overload may be used for this case if that is the only way to complete the urgent `high` priority task on time.
+
 ### Stable Re-Optimization
 
 - When rescheduling, avoid unnecessary movement of already-planned future work unless there is a meaningful benefit.
@@ -247,6 +258,49 @@ These rules should influence optimization and ranking, but can be relaxed if req
 - A task is `incomplete` if all of its total required time is not scheduled before its due date.
 - A task should not be considered complete simply because some portion of its work was scheduled.
 - If the schedule output needs more detail, incomplete tasks may still include additional metadata such as `missingMinutes`, but the main completion distinction is binary: complete or incomplete.
+
+## Optimization Formulation
+
+The scheduler is implemented as a discrete optimization problem over time rather than a simple first-fit planner.
+
+### Model Structure
+
+- Time is modeled in discrete `15-minute` units.
+- Availability blocks define the only valid windows where work may be placed.
+- Each task is assigned zero or more work segments.
+- Each segment must satisfy the hard scheduling rules, including:
+- minimum `60-minute` length
+- maximum continuous length based on `cognitiveLoad`
+- recovery-gap requirements
+- no placement after the task due-date cutoff
+
+### Hard Constraints
+
+- Segments must lie fully inside valid available time.
+- Segments for different tasks may not overlap.
+- A task may only be split into valid segment lengths.
+- Post-due work is not allowed.
+- If a task cannot be fully placed while respecting these constraints, it is reported as incomplete.
+
+### Optimization Objective
+
+The backend evaluates alternative valid task plans and chooses the best one using an explicit objective function.
+
+The objective currently favors:
+
+- completing more tasks before their due dates
+- respecting the due-date versus priority ranking rules
+- preferring `in_progress` work over equivalent `new` work
+- reducing fragmentation by preferring fewer segments
+- preferring more even segment splits when a task must be split
+- avoiding weaker solutions where lower-value tasks displace higher-value tasks
+
+### Search Method
+
+- The backend uses a branch-and-bound search over valid task plans.
+- Candidate plans are generated per task from valid segment combinations.
+- Partial solutions are pruned when they cannot outperform the current best solution under the objective.
+- This makes the scheduler an explicit constrained optimization process, even though it does not currently rely on an external solver library.
 
 ## Re-Optimization And History Preservation Rules
 

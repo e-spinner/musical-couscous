@@ -1,5 +1,103 @@
 (function attachArchitecturePlanner(global) {
   const DAY_MS = 86400000;
+  const MINIMUM_WORK_BLOCK_MINUTES = 60;
+  const SCHEDULING_STEP_MINUTES = 15;
+  const COGNITIVE_LOAD_CAP_MINUTES = {
+    high: 90,
+    medium: 120,
+    low: 180
+  };
+
+  function getCognitiveLoadCapMinutes(cognitiveLoad) {
+    return COGNITIVE_LOAD_CAP_MINUTES[cognitiveLoad] || COGNITIVE_LOAD_CAP_MINUTES.medium;
+  }
+
+  function isEmergencyOverloadEligible(dueDate) {
+    if (!dueDate) {
+      return false;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const due = new Date(`${dueDate}T00:00:00`);
+    due.setHours(0, 0, 0, 0);
+    const diffDays = Math.floor((due.getTime() - today.getTime()) / DAY_MS);
+    return diffDays <= 2;
+  }
+
+  function canPartitionTaskEstimate(totalMinutes, cognitiveLoad, dueDate = null) {
+    const estimateMinutes = Number(totalMinutes);
+    const capMinutes = getCognitiveLoadCapMinutes(cognitiveLoad);
+    const allowOverload = isEmergencyOverloadEligible(dueDate);
+
+    if (!Number.isFinite(estimateMinutes) || estimateMinutes <= 0) {
+      return false;
+    }
+    if (estimateMinutes < MINIMUM_WORK_BLOCK_MINUTES) {
+      return true;
+    }
+    if (estimateMinutes % SCHEDULING_STEP_MINUTES !== 0) {
+      return false;
+    }
+    if (allowOverload) {
+      return true;
+    }
+    if (estimateMinutes <= capMinutes) {
+      return true;
+    }
+
+    for (
+      let segmentMinutes = Math.min(capMinutes, estimateMinutes);
+      segmentMinutes >= MINIMUM_WORK_BLOCK_MINUTES;
+      segmentMinutes -= SCHEDULING_STEP_MINUTES
+    ) {
+      if (canPartitionTaskEstimate(estimateMinutes - segmentMinutes, cognitiveLoad, dueDate)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function findNearestValidEstimate(totalMinutes, cognitiveLoad, direction, dueDate = null) {
+    const estimateMinutes = Number(totalMinutes);
+    for (
+      let candidate = estimateMinutes + (direction * SCHEDULING_STEP_MINUTES);
+      candidate >= SCHEDULING_STEP_MINUTES && candidate <= 20160;
+      candidate += direction * SCHEDULING_STEP_MINUTES
+    ) {
+      if (canPartitionTaskEstimate(candidate, cognitiveLoad, dueDate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function getTaskEstimateValidationMessage(totalMinutes, cognitiveLoad, dueDate = null) {
+    const estimateMinutes = Number(totalMinutes);
+    if (!Number.isFinite(estimateMinutes) || estimateMinutes <= 0) {
+      return '';
+    }
+
+    if (estimateMinutes < MINIMUM_WORK_BLOCK_MINUTES) {
+      return '';
+    }
+
+    if (canPartitionTaskEstimate(estimateMinutes, cognitiveLoad, dueDate)) {
+      return '';
+    }
+
+    const capMinutes = getCognitiveLoadCapMinutes(cognitiveLoad);
+    const lowerOption = findNearestValidEstimate(estimateMinutes, cognitiveLoad, -1, dueDate);
+    const higherOption = findNearestValidEstimate(estimateMinutes, cognitiveLoad, 1, dueDate);
+    const suggestionText = [lowerOption, higherOption]
+      .filter((value, index, values) => value !== null && values.indexOf(value) === index)
+      .join(' or ');
+
+    return suggestionText
+      ? `A ${cognitiveLoad} load task estimated at ${estimateMinutes} minutes cannot be split into valid ${MINIMUM_WORK_BLOCK_MINUTES}-${capMinutes} minute work blocks. Try ${suggestionText} minutes or lower the cognitive load.`
+      : `A ${cognitiveLoad} load task estimated at ${estimateMinutes} minutes cannot be split into valid ${MINIMUM_WORK_BLOCK_MINUTES}-${capMinutes} minute work blocks.`;
+  }
 
   function getNextHalfHour() {
     const now = new Date();
@@ -147,21 +245,39 @@
       .map((task) => {
         const taskEstimate = Number(task.estimateMinutes);
         const remainingMinutes = Math.max(0, taskEstimate - (allocatedMinutes.get(task.id) || 0));
-        const normalizedRemainingMinutes = remainingMinutes > 0 && remainingMinutes < 60 && taskEstimate >= 60
-          ? 60
-          : remainingMinutes;
 
         return {
           ...task,
-          estimateMinutes: normalizedRemainingMinutes
+          estimateMinutes: remainingMinutes
         };
       })
       .filter((task) => task.estimateMinutes > 0);
   }
 
-  function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) {
+  function summarizeSchedule(schedule, unscheduled, timeBlocks, taskList) {
+    const totalAvailableMinutes = timeBlocks.reduce(
+      (sum, block) => sum + (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60000,
+      0
+    );
+    const completeCount = schedule.filter((task) => task.completionStatus === 'complete').length;
+    const incompleteScheduledCount = schedule.filter((task) => task.completionStatus !== 'complete').length;
+
+    return {
+      timeBlockCount: timeBlocks.length,
+      taskCount: taskList.length,
+      scheduledCount: schedule.length,
+      completeCount,
+      incompleteCount: incompleteScheduledCount + unscheduled.length,
+      unscheduledCount: unscheduled.length,
+      totalAvailableMinutes,
+      totalPlannedMinutes: taskList.reduce((sum, task) => sum + Number(task.estimateMinutes || 0), 0)
+    };
+  }
+
+  function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff, timeBlocks = []) {
     const taskMap = new Map(taskList.map((task) => [task.id, task]));
     const merged = new Map();
+    const carriedUnscheduled = new Map();
 
     (previousSchedule?.schedule || []).forEach((task) => {
       const fixedSegments = task.segments.filter((segment) => new Date(segment.start) < cutoff);
@@ -176,6 +292,8 @@
         dueDate: taskMap.get(task.id)?.dueDate ?? task.dueDate,
         priority: taskMap.get(task.id)?.priority ?? task.priority,
         cognitiveLoad: taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad,
+        status: taskMap.get(task.id)?.status ?? task.status ?? 'new',
+        completionStatus: task.completionStatus || 'complete',
         segments: fixedSegments
       });
     });
@@ -187,6 +305,9 @@
         current.dueDate = taskMap.get(task.id)?.dueDate ?? task.dueDate;
         current.priority = taskMap.get(task.id)?.priority ?? task.priority;
         current.cognitiveLoad = taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad;
+        current.status = taskMap.get(task.id)?.status ?? task.status ?? current.status;
+        current.completionStatus = task.completionStatus || current.completionStatus || 'complete';
+        current.missingMinutes = task.missingMinutes;
         current.segments = [...current.segments, ...task.segments].sort((a, b) => new Date(a.start) - new Date(b.start));
         return;
       }
@@ -196,25 +317,112 @@
         estimateMinutes: taskMap.get(task.id)?.estimateMinutes ?? task.estimateMinutes,
         dueDate: taskMap.get(task.id)?.dueDate ?? task.dueDate,
         priority: taskMap.get(task.id)?.priority ?? task.priority,
-        cognitiveLoad: taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad
+        cognitiveLoad: taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad,
+        status: taskMap.get(task.id)?.status ?? task.status ?? 'new'
       });
     });
 
+    (nextSchedule.unscheduled || []).forEach((task) => {
+      const current = merged.get(task.id);
+      if (current) {
+        current.completionStatus = 'incomplete';
+        current.missingMinutes = task.missingMinutes;
+        current.estimateMinutes = taskMap.get(task.id)?.estimateMinutes ?? task.estimateMinutes;
+        current.dueDate = taskMap.get(task.id)?.dueDate ?? task.dueDate;
+        current.priority = taskMap.get(task.id)?.priority ?? task.priority;
+        current.cognitiveLoad = taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad;
+        current.status = taskMap.get(task.id)?.status ?? task.status ?? current.status;
+        return;
+      }
+
+      carriedUnscheduled.set(task.id, {
+        ...task,
+        estimateMinutes: taskMap.get(task.id)?.estimateMinutes ?? task.estimateMinutes,
+        dueDate: taskMap.get(task.id)?.dueDate ?? task.dueDate,
+        priority: taskMap.get(task.id)?.priority ?? task.priority,
+        cognitiveLoad: taskMap.get(task.id)?.cognitiveLoad ?? task.cognitiveLoad,
+        status: taskMap.get(task.id)?.status ?? task.status ?? 'new',
+        completionStatus: task.completionStatus || 'incomplete'
+      });
+    });
+
+    const schedule = Array.from(merged.values())
+      .sort((a, b) => new Date(a.segments[0].start) - new Date(b.segments[0].start));
+    const unscheduled = Array.from(carriedUnscheduled.values())
+      .sort((a, b) => new Date(`${a.dueDate}T00:01:00`) - new Date(`${b.dueDate}T00:01:00`));
+    const summary = nextSchedule.summary || summarizeSchedule(schedule, unscheduled, timeBlocks, taskList);
+    const meta = nextSchedule.meta || previousSchedule?.meta || null;
+
     return {
       ...nextSchedule,
-      schedule: Array.from(merged.values()).sort((a, b) => new Date(a.segments[0].start) - new Date(b.segments[0].start))
+      ...(meta ? { meta } : {}),
+      summary,
+      schedule,
+      unscheduled
     };
+  }
+
+  function getScheduleHealthMessage(scheduleData) {
+    const summary = scheduleData?.summary;
+    if (!summary) {
+      return {
+        tone: 'neutral',
+        message: 'No optimized plan has been generated yet.'
+      };
+    }
+    if (summary.incompleteCount > 0) {
+      return {
+        tone: 'warning',
+        message: `${summary.incompleteCount} task${summary.incompleteCount === 1 ? '' : 's'} cannot be fully completed before the deadline.`
+      };
+    }
+    if ((summary.scheduledCount || 0) > 0) {
+      return {
+        tone: 'success',
+        message: 'On track.'
+      };
+    }
+    return {
+      tone: 'neutral',
+      message: 'No future work is currently scheduled.'
+    };
+  }
+
+  function getSpecificWindowsReminderMessages(availability) {
+    const schedule14 = Array.isArray(availability?.schedule14)
+      ? availability.schedule14
+      : Array.from({ length: 14 }, () => ({}));
+
+    const hasOverridesInRange = (startIndex, length) => schedule14
+      .slice(startIndex, startIndex + length)
+      .some((day) => Object.values(day || {}).some(Boolean));
+
+    const reminders = [];
+    if (!hasOverridesInRange(0, 7)) {
+      reminders.push('Week 1 specific windows is empty.');
+    }
+    if (!hasOverridesInRange(7, 7)) {
+      reminders.push('Week 2 specific windows is empty.');
+    }
+    return reminders;
   }
 
   global.ArchitecturePlanner = {
     addThirtyMinutes,
     buildSchedulingTasks,
+    canPartitionTaskEstimate,
+    getCognitiveLoadCapMinutes,
     getCurrentMonday,
     getNextHalfHour,
+    getScheduleHealthMessage,
+    getSpecificWindowsReminderMessages,
+    getTaskEstimateValidationMessage,
     getTimeSlots,
+    isEmergencyOverloadEligible,
     mergeScheduleHistory,
     normalizeAvailabilityWindow,
     subtractSegmentsFromBlocks,
+    summarizeSchedule,
     toIsoDateTime,
     trimBlocksToFuture
   };
