@@ -562,6 +562,46 @@ def build_incomplete_payload(task: Task, reason: dict | None = None) -> dict:
         "completionStatus": "incomplete",
         "missingMinutes": task.estimate_minutes,
     }
+    if reason:
+        if reason.get("code") is not None:
+            payload["unscheduledReasonCode"] = reason["code"]
+        if reason.get("message") is not None:
+            payload["unscheduledReason"] = reason["message"]
+        if reason.get("details") is not None:
+            payload["unscheduledDetails"] = reason["details"]
+    return payload
+
+
+def infer_unscheduled_reason(task: Task, time_blocks: list[TimeBlock], *, scheduled_count: int = 0) -> dict:
+    if task.estimate_minutes < MINIMUM_WORK_BLOCK_MINUTES:
+        return {
+            "code": "estimate_below_minimum_block",
+            "message": "Task estimate is below the minimum schedulable work block.",
+        }
+
+    eligible_blocks = build_eligible_blocks(task, time_blocks)
+    if not eligible_blocks:
+        return {
+            "code": "deadline_conflict",
+            "message": "No valid availability remains before the task deadline.",
+        }
+
+    if scheduled_count > 0:
+        return {
+            "code": "higher_value_tasks_preferred",
+            "message": "The optimizer chose other tasks with higher scheduling value first.",
+        }
+
+    if max((block.duration_minutes for block in eligible_blocks), default=0) < MINIMUM_WORK_BLOCK_MINUTES:
+        return {
+            "code": "insufficient_contiguous_time",
+            "message": "No remaining availability block is long enough to schedule this task.",
+        }
+
+    return {
+        "code": "insufficient_capacity",
+        "message": "Not enough valid time remained to place this task before its deadline.",
+    }
 
 
 def rebuild_payload(task: Task, segments: list[Segment], *, used_emergency_overload: bool) -> dict:
@@ -867,7 +907,13 @@ def solve_with_cp_sat(
 
     status = solver.Solve(model, incumbent)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE) and not incumbent.has_solution:
-        unscheduled = [build_incomplete_payload(task) for task in tasks]
+        unscheduled = [
+            build_incomplete_payload(
+                task,
+                infer_unscheduled_reason(task, time_blocks),
+            )
+            for task in tasks
+        ]
         return [], sorted(unscheduled, key=lambda item: (item["dueDate"], item["title"].lower())), "python-cp-sat"
 
     selected_segments_by_task: dict[str, list[Segment]] = {}
@@ -899,7 +945,10 @@ def solve_with_cp_sat(
             selected_task_ids.add(task.id)
 
     unscheduled = [
-        build_incomplete_payload(task)
+        build_incomplete_payload(
+            task,
+            infer_unscheduled_reason(task, time_blocks, scheduled_count=len(scheduled)),
+        )
         for task in tasks
         if task.id not in selected_task_ids
     ]
@@ -1197,7 +1246,12 @@ def greedy_schedule(
             committed_segments = sorted(committed_segments, key=lambda segment: (segment.start, segment.end))
             continue
 
-        unscheduled_payloads.append(build_incomplete_payload(task))
+        unscheduled_payloads.append(
+            build_incomplete_payload(
+                task,
+                infer_unscheduled_reason(task, time_blocks, scheduled_count=len(scheduled_payloads)),
+            )
+        )
 
     scheduled = sorted(
         scheduled_payloads,
@@ -1254,7 +1308,12 @@ def fill_unscheduled_tasks_greedily(
             )
             continue
 
-        remaining_unscheduled.append(build_incomplete_payload(task))
+        remaining_unscheduled.append(
+            build_incomplete_payload(
+                task,
+                infer_unscheduled_reason(task, time_blocks, scheduled_count=len(repaired_schedule)),
+            )
+        )
 
     repaired_schedule.sort(key=lambda item: datetime.fromisoformat(item["segments"][0]["start"]))
     remaining_unscheduled.sort(key=lambda item: (item["dueDate"], item["title"].lower()))
