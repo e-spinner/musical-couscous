@@ -55,26 +55,58 @@ const quickTaskStatus = document.getElementById('quick-task-status');
 const quickTaskPriority = document.getElementById('quick-task-priority');
 const quickTaskCognitive = document.getElementById('quick-task-cognitive');
 const quickAddFeedback = document.getElementById('quick-add-feedback');
+const queueLoadAllBtn = document.getElementById('queue-load-all');
+const unscheduledSection = document.getElementById('unscheduled-section');
+const unscheduledBadge = document.getElementById('unscheduled-badge');
+const unscheduledList = document.getElementById('unscheduled-list');
 let forceReviewBanner = false;
 let activeTaskId = null;
 let selectedTimelineDate = createDayStart(new Date());
+let dashboardTaskActionError = '';
+let showAllQueueItems = false;
 
 const dateOptions = { weekday: 'long', month: 'long', day: 'numeric' };
 dateLabel.textContent = new Date().toLocaleDateString('en-US', dateOptions);
 deleteTaskBtn.classList.add('hidden');
 
+/**
+ * Returns a new Date object set to midnight (00:00:00.000) on the same day as the input.
+ *
+ * Used throughout the dashboard to normalize dates for same-day comparisons
+ * without time component interference.
+ *
+ * @param {Date} input - The date to normalize.
+ * @returns {Date} A new Date object at midnight on the same calendar day.
+ */
 function createDayStart(input) {
   const next = new Date(input);
   next.setHours(0, 0, 0, 0);
   return next;
 }
 
+/**
+ * Returns true if two Date objects fall on the same calendar day.
+ *
+ * Compares year, month, and date independently, ignoring time components.
+ *
+ * @param {Date} first - The first date.
+ * @param {Date} second - The second date.
+ * @returns {boolean} True if both dates share the same year, month, and day.
+ */
 function isSameDayValue(first, second) {
   return first.getFullYear() === second.getFullYear()
     && first.getMonth() === second.getMonth()
     && first.getDate() === second.getDate();
 }
 
+/**
+ * Returns the start and end bounds of the current 14-day availability window.
+ *
+ * The window begins on the stored availability start Monday (or the current Monday
+ * if not set) and ends 13 days later.
+ *
+ * @returns {{ start: Date, end: Date }} The first and last valid dates for timeline navigation.
+ */
 function getTimelineBounds() {
   const availability = deriveAvailabilityBlocks();
   const start = createDayStart(availability.startMonday || Planner.getCurrentMonday());
@@ -84,6 +116,15 @@ function getTimelineBounds() {
   return { start, end };
 }
 
+/**
+ * Clamps a date to within the current 14-day availability window.
+ *
+ * Returns the start bound if the date is before the window, the end bound
+ * if it is after, or the date itself if it falls within.
+ *
+ * @param {Date} date - The date to clamp.
+ * @returns {Date} The clamped date within the availability window.
+ */
 function clampTimelineDate(date) {
   const { start, end } = getTimelineBounds();
   if (date < start) {
@@ -95,6 +136,12 @@ function clampTimelineDate(date) {
   return date;
 }
 
+/**
+ * Updates the timeline day label to reflect the currently selected date.
+ *
+ * Shows 'Timeline: Today' if the selected date is today, or a formatted
+ * short date string (e.g. 'Timeline: Mon, Jun 3') otherwise.
+ */
 function updateTimelineDayLabel() {
   const today = createDayStart(new Date());
   const isToday = isSameDayValue(selectedTimelineDate, today);
@@ -106,6 +153,15 @@ function updateTimelineDayLabel() {
   timelineDayLabel.textContent = `Timeline: ${isToday ? 'Today' : formatted}`;
 }
 
+/**
+ * Reads and parses the last generated schedule from localStorage.
+ *
+ * Also normalizes the availability window if the stored schedule contains
+ * availability data that has drifted. Returns null if nothing is stored
+ * or if parsing fails.
+ *
+ * @returns {Object|null} The parsed schedule object, or null if unavailable.
+ */
 function readSchedule() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) {
@@ -121,6 +177,13 @@ function readSchedule() {
   }
 }
 
+/**
+ * Reads and parses the availability object from localStorage.
+ *
+ * Returns null if nothing is stored or if parsing fails.
+ *
+ * @returns {Object|null} The raw availability object, or null if unavailable.
+ */
 function readAvailability() {
   const raw = window.localStorage.getItem(AVAILABILITY_KEY);
   if (!raw) {
@@ -134,6 +197,15 @@ function readAvailability() {
   }
 }
 
+/**
+ * Reads, parses, and cleans the task list from localStorage.
+ *
+ * Filters out completed tasks whose due date has passed, writes the cleaned
+ * list back to storage if any were removed, and applies default values for
+ * optional fields. Returns an empty array if nothing is stored or parsing fails.
+ *
+ * @returns {Array<Object>} The cleaned and normalized task list.
+ */
 function readTasks() {
   const raw = window.localStorage.getItem(TASKS_KEY);
   if (!raw) {
@@ -161,27 +233,148 @@ function readTasks() {
   }
 }
 
+/**
+ * Persists a task list to localStorage under the tasks key.
+ *
+ * @param {Array<Object>} tasks - The task list to save.
+ */
 function writeTasks(tasks) {
   window.localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
 }
 
+/**
+ * Parses a due date string into a Date object set to 00:01 local time.
+ *
+ * Using 00:01 instead of midnight avoids off-by-one issues with timezone
+ * conversions that could shift the date to the previous day.
+ *
+ * @param {string} dueDate - An ISO date string in YYYY-MM-DD format.
+ * @returns {Date} A Date object representing the start of the due date.
+ */
 function parseDueDateStart(dueDate) {
   return new Date(`${dueDate}T00:01:00`);
 }
 
+/**
+ * Formats a due date string into a short localized display string (e.g. 'Jun 3').
+ *
+ * @param {string} dueDate - An ISO date string in YYYY-MM-DD format.
+ * @returns {string} A short month-and-day string using the browser locale.
+ */
 function formatDueDate(dueDate) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parseDueDateStart(dueDate));
 }
 
+/**
+ * Formats a task status value into a human-readable label.
+ *
+ * Converts 'in_progress' to 'In Progress' and capitalizes the first letter
+ * of any other status value.
+ *
+ * @param {string} status - A task status string ('new', 'in_progress', or 'completed').
+ * @returns {string} A display-ready status label.
+ */
 function formatStatus(status) {
   return status === 'in_progress' ? 'In Progress' : status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+/**
+ * Capitalizes the first letter of a priority or cognitive load value for display.
+ *
+ * @param {string} value - A lowercase level string (e.g. 'high', 'medium', 'low').
+ * @returns {string} The value with its first letter capitalized.
+ */
 function formatLevel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+/**
+ * Escapes HTML special characters in a string to prevent XSS injection.
+ *
+ * Replaces &, <, >, ", and ' with their HTML entity equivalents. Used when
+ * inserting user-provided content directly into innerHTML.
+ *
+ * @param {*} value - The value to escape (will be coerced to a string).
+ * @returns {string} The escaped string safe for use in HTML contexts.
+ */
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderUnscheduledReason(task) {
+  if (!task.unscheduledReason) {
+    return '';
+  }
+  return `<p class="mt-2 text-sm text-red-900">${escapeHtml(task.unscheduledReason)}</p>`;
+}
+
+/**
+ * Escapes HTML special characters in a string to prevent XSS injection.
+ *
+ * Replaces &, <, >, ", and ' with their HTML entity equivalents. Used when
+ * inserting user-provided content directly into innerHTML.
+ *
+ * @param {*} value - The value to escape (will be coerced to a string).
+ * @returns {string} The escaped string safe for use in HTML contexts.
+ */
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+/**
+ * Returns an HTML string showing the unscheduled reason for a task, or an empty string.
+ *
+ * Only renders if the task has an unscheduledReason field. The reason text is
+ * HTML-escaped before insertion.
+ *
+ * @param {Object} task - A task object that may contain an unscheduledReason field.
+ * @returns {string} An HTML paragraph string, or '' if no reason is present.
+ */
+function renderUnscheduledReason(task) {
+  if (!task.unscheduledReason) {
+    return '';
+  }
+  return `<p class="mt-2 text-sm text-red-900">${escapeHtml(task.unscheduledReason)}</p>`;
+}
+
+/**
+ * Updates the dashboard schedule health banner with the appropriate message and tone.
+ *
+ * If a task action error is active (e.g. a failed schedule refresh after editing),
+ * that error takes priority over the normal health message. Supports 'warning',
+ * 'success', and neutral tones via CSS class swapping.
+ *
+ * @param {Object|null} scheduleData - The current schedule payload, or null if unavailable.
+ */
 function renderScheduleHealth(scheduleData) {
+  if (dashboardTaskActionError) {
+    dashboardScheduleHealthEl.textContent = dashboardTaskActionError;
+    dashboardScheduleHealthEl.classList.remove(
+      'hidden',
+      'border-red-200/40',
+      'bg-red-50/10',
+      'text-red-100',
+      'border-olive/20',
+      'bg-olive/10',
+      'text-cream',
+      'border-white/10',
+      'bg-white/5',
+      'text-cream/75'
+    );
+    dashboardScheduleHealthEl.classList.add('border-red-200/40', 'bg-red-50/10', 'text-red-100');
+    return;
+  }
+
   const health = Planner.getScheduleHealthMessage(scheduleData);
   dashboardScheduleHealthEl.textContent = health.message;
   dashboardScheduleHealthEl.classList.remove(
@@ -209,6 +402,14 @@ function renderScheduleHealth(scheduleData) {
   dashboardScheduleHealthEl.classList.add('border-white/10', 'bg-white/5', 'text-cream/75');
 }
 
+/**
+ * Shows or hides the specific-windows reminder banner based on availability state.
+ *
+ * The banner reminds users to add week-specific overrides when their routine
+ * template may not reflect upcoming days accurately. It is suppressed for the
+ * session once dismissed, and the dismissal flag is cleared when there are
+ * no more reminders to show.
+ */
 function updateSpecificWindowsReminder() {
   const availability = readAvailability();
   const reminders = Planner.getSpecificWindowsReminderMessages(availability);
@@ -225,6 +426,7 @@ function updateSpecificWindowsReminder() {
   dashboardSpecificWindowsReminder.classList.remove('hidden');
 }
 
+// Build hour markers and tick lines for the timeline view (6 AM to 11 PM)
 for (let hour = 6; hour <= 23; hour += 1) {
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
@@ -241,6 +443,13 @@ for (let hour = 6; hour <= 23; hour += 1) {
   timelineContainer.appendChild(line);
 }
 
+/**
+ * Updates the current-time indicator line and passed-time overlay on the timeline.
+ *
+ * Only renders the indicator when viewing today's timeline and the current hour
+ * falls within the visible range (6 AM to 11 PM). Also auto-scrolls the timeline
+ * to the current time on first render. Hides the indicator when viewing other days.
+ */
 function updateTimelineNow() {
   const now = new Date();
   const hours = now.getHours();
@@ -274,10 +483,26 @@ function updateTimelineNow() {
   }
 }
 
+/**
+ * Alias for isSameDayValue — returns true if two dates fall on the same calendar day.
+ *
+ * @param {Date} first - The first date.
+ * @param {Date} second - The second date.
+ * @returns {boolean} True if both dates share the same year, month, and day.
+ */
 function sameDay(first, second) {
   return isSameDayValue(first, second);
 }
 
+/**
+ * Formats a start and end ISO datetime string into a human-readable time range.
+ *
+ * Example output: '9:00 AM to 10:30 AM'
+ *
+ * @param {string} startIso - ISO 8601 datetime string for the range start.
+ * @param {string} endIso - ISO 8601 datetime string for the range end.
+ * @returns {string} A formatted time range string using the browser locale.
+ */
 function formatRange(startIso, endIso) {
   const formatter = new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
@@ -286,6 +511,62 @@ function formatRange(startIso, endIso) {
   return `${formatter.format(new Date(startIso))} to ${formatter.format(new Date(endIso))}`;
 }
 
+/**
+ * Formats a scheduled segment's start and end into a full date-and-time range string.
+ *
+ * Includes weekday, month, day, and time for the start, and only time for the end.
+ * Example output: 'Mon, Jun 3 at 9:00 AM to 10:30 AM'
+ *
+ * @param {{ start: string, end: string }} segment - A segment object with ISO datetime strings.
+ * @returns {string} A formatted date-and-time range string.
+ */
+function formatQueueTime(segment) {
+  const start = new Date(segment.start);
+  return `${new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(start)} to ${new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(segment.end))}`;
+}
+
+/**
+ * Formats a scheduled segment's start and end into a full date-and-time range string.
+ *
+ * Includes weekday, month, day, and time for the start, and only time for the end.
+ * Example output: 'Mon, Jun 3 at 9:00 AM to 10:30 AM'
+ *
+ * @param {{ start: string, end: string }} segment - A segment object with ISO datetime strings.
+ * @returns {string} A formatted date-and-time range string.
+ */
+function formatQueueTime(segment) {
+  const start = new Date(segment.start);
+  return `${new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(start)} to ${new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(segment.end))}`;
+}
+
+/**
+ * Flattens a schedule array into a single list of segments with task metadata attached.
+ *
+ * Each segment is augmented with taskId, title, dueDate, and estimateMinutes from
+ * its parent task, making it self-contained for rendering without repeated lookups.
+ *
+ * @param {Array<Object>} schedule - The schedule array where each item has an id, title,
+ *   dueDate, estimateMinutes, and segments array.
+ * @returns {Array<Object>} A flat array of segment objects with task metadata merged in.
+ */
 function flattenScheduled(schedule) {
   return schedule.flatMap((task) =>
     task.segments.map((segment) => ({
@@ -298,14 +579,41 @@ function flattenScheduled(schedule) {
   );
 }
 
+/**
+ * Returns an array of time slot strings for the full day range.
+ *
+ * Delegates to the shared Planner utility with no hour arguments,
+ * using the Planner's default start and end hours.
+ *
+ * @returns {Array<string>} An array of time slot strings (e.g. ['06:00', '06:30', ...]).
+ */
 function getTimeSlots() {
   return Planner.getTimeSlots();
 }
 
+/**
+ * Returns the next half-hour boundary from the current time.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @returns {Date} A Date snapped to the next :00 or :30 minute mark.
+ */
 function getNextHalfHour() {
   return Planner.getNextHalfHour();
 }
 
+/**
+ * Derives open and blocked time block arrays from stored availability data.
+ *
+ * Combines the routine weekly template with 14-day specific overrides to
+ * produce separate lists of open and blocked blocks. Open blocks are trimmed
+ * to start from the current time. Returns empty arrays and a default start
+ * Monday if no availability is stored.
+ *
+ * @returns {{ openBlocks: Array<Object>, blockedBlocks: Array<Object>, startMonday: Date }}
+ *   Object containing the open blocks (future only), all blocked blocks, and the
+ *   window start date.
+ */
 function deriveAvailabilityBlocks() {
   const availability = readAvailability();
   if (!availability) {
@@ -372,22 +680,65 @@ function deriveAvailabilityBlocks() {
   };
 }
 
+/**
+ * Removes time blocks that fall entirely in the past.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @param {Array<Object>} blocks - Array of time block objects to filter.
+ * @returns {Array<Object>} Blocks with fully past entries removed.
+ */
 function trimBlocksToFuture(blocks) {
   return Planner.trimBlocksToFuture(blocks);
 }
 
+/**
+ * Subtracts committed segments from availability blocks, returning free blocks.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @param {Array<Object>} blocks - The full available time blocks.
+ * @param {Array<Object>} segments - Already-committed segments to remove.
+ * @returns {Array<Object>} Remaining free time blocks after subtraction.
+ */
 function subtractSegmentsFromBlocks(blocks, segments) {
   return Planner.subtractSegmentsFromBlocks(blocks, segments);
 }
 
+/**
+ * Combines a Date object and a time slot string into an ISO 8601 datetime string.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @param {Date} date - The date to combine.
+ * @param {string} time - A time slot string in 'HH:MM' format.
+ * @returns {string} An ISO 8601 datetime string.
+ */
 function toIsoDateTime(date, time) {
   return Planner.toIsoDateTime(date, time);
 }
 
+/**
+ * Returns an ISO 8601 datetime string 30 minutes after a given date and time slot.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @param {Date} date - The base date.
+ * @param {string} time - A time slot string in 'HH:MM' format.
+ * @returns {string} An ISO 8601 datetime string 30 minutes after the input.
+ */
 function addThirtyMinutes(date, time) {
   return Planner.addThirtyMinutes(date, time);
 }
 
+/**
+ * Opens the task editor modal pre-filled with the given task's data, or blank for a new task.
+ *
+ * Sets the modal title, populates all form fields, controls delete button visibility,
+ * and clears any previous feedback text.
+ *
+ * @param {Object|null} task - The task to edit, or null to open the modal for a new task.
+ */
 function openTaskEditor(task = null) {
   activeTaskId = task?.id || null;
   ensureStatusOptions(quickTaskStatus, Boolean(task));
@@ -404,6 +755,9 @@ function openTaskEditor(task = null) {
   taskModal.classList.add('flex');
 }
 
+/**
+ * Closes the task editor modal and resets the active task ID and feedback text.
+ */
 function closeTaskEditor() {
   activeTaskId = null;
   taskModal.classList.add('hidden');
@@ -411,6 +765,16 @@ function closeTaskEditor() {
   quickAddFeedback.textContent = '';
 }
 
+/**
+ * Ensures the 'Completed' option is present or absent in a status select element.
+ *
+ * Used to prevent new tasks from being created with a completed status while
+ * allowing existing tasks to be set to completed during editing.
+ *
+ * @param {HTMLSelectElement} selectEl - The status dropdown element to modify.
+ * @param {boolean} includeCompleted - If true, adds the 'Completed' option if missing.
+ *   If false, removes it and resets the value to 'new' if currently 'completed'.
+ */
 function ensureStatusOptions(selectEl, includeCompleted) {
   const completedOption = selectEl.querySelector('option[value="completed"]');
   if (includeCompleted) {
@@ -430,19 +794,53 @@ function ensureStatusOptions(selectEl, includeCompleted) {
   }
 }
 
+/**
+ * Shows or hides the developer tools cluster by toggling CSS classes.
+ *
+ * @param {boolean} isVisible - If true, shows the developer tools; if false, hides them.
+ */
 function setDeveloperVisibility(isVisible) {
   dashboardDeveloperToolsEl.classList.toggle('hidden', !isVisible);
   dashboardDeveloperToolsEl.classList.toggle('flex', isVisible);
 }
 
+/**
+ * Filters and formats the task list for submission to the backend scheduler.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @param {Array<Object>} taskList - The full list of task objects.
+ * @param {Object|null} previousSchedule - The last saved schedule.
+ * @param {Date} cutoff - The scheduling cutoff time.
+ * @returns {Array<Object>} Tasks formatted for the backend API request.
+ */
 function buildSchedulingTasks(taskList, previousSchedule, cutoff) {
   return Planner.buildSchedulingTasks(taskList, previousSchedule, cutoff);
 }
 
+/**
+ * Merges a new backend schedule result with the preserved history from the previous schedule.
+ *
+ * Delegates to the shared Planner utility, passing current open availability blocks.
+ *
+ * @param {Object|null} previousSchedule - The last saved schedule object.
+ * @param {Object} nextSchedule - The new schedule result from the backend.
+ * @param {Array<Object>} taskList - The current full task list.
+ * @param {Date} cutoff - The scheduling cutoff time.
+ * @returns {Object} A merged schedule object ready to be saved and rendered.
+ */
 function mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff) {
   return Planner.mergeScheduleHistory(previousSchedule, nextSchedule, taskList, cutoff, deriveAvailabilityBlocks().openBlocks);
 }
 
+/**
+ * Formats the solver name and elapsed time from a schedule into a short display string.
+ *
+ * Returns a fallback string if solver metadata is missing or incomplete.
+ *
+ * @param {Object|null} scheduleData - The schedule object containing meta.solver and meta.elapsedMs.
+ * @returns {string} A formatted string like 'python-cp-sat 42.3 ms', or a fallback message.
+ */
 function formatSolverMeta(scheduleData) {
   const solver = scheduleData?.meta?.solver;
   const elapsedMs = scheduleData?.meta?.elapsedMs;
@@ -452,13 +850,23 @@ function formatSolverMeta(scheduleData) {
   return `${solver} ${elapsedMs.toFixed(elapsedMs < 10 ? 2 : 1)} ms`;
 }
 
+/**
+ * Sends the current task list to the backend for scheduling and saves the result.
+ *
+ * Reads availability, derives free blocks, subtracts fixed segments, and posts
+ * the schedulable tasks to the backend API. Merges the response with preserved
+ * history and writes the result back to localStorage. Handles edge cases where
+ * there are no available blocks or no schedulable tasks gracefully.
+ *
+ * @param {Array<Object>} taskList - The task list to use for this scheduling run.
+ * @returns {Promise<void>}
+ * @throws {Error} If the backend returns a non-OK response.
+ */
 async function syncSchedule(taskList) {
   const timeBlocks = deriveAvailabilityBlocks().openBlocks;
   const previousSchedule = readSchedule();
   const cutoff = getNextHalfHour();
-  const fixedSegments = (previousSchedule?.schedule || [])
-    .flatMap((task) => task.segments)
-    .filter((segment) => new Date(segment.start) < cutoff);
+  const fixedSegments = Planner.getFixedSegmentsBeforeCutoff(previousSchedule?.schedule || [], cutoff);
   const availableBlocks = subtractSegmentsFromBlocks(timeBlocks, fixedSegments);
   const schedulableTasks = buildSchedulingTasks(taskList, previousSchedule, cutoff);
 
@@ -493,6 +901,65 @@ async function syncSchedule(taskList) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedSchedule));
 }
 
+/**
+ * Saves a new task list, closes the task editor, re-renders the dashboard,
+ * and triggers a background schedule sync.
+ *
+ * If the sync fails, stores the error message in dashboardTaskActionError so
+ * the health banner can reflect the failure on the next render.
+ *
+ * @param {Array<Object>} nextTasks - The updated task list to save and sync.
+ * @returns {Promise<void>}
+ */
+async function persistTasksAndRefresh(nextTasks) {
+  writeTasks(nextTasks);
+  closeTaskEditor();
+  renderDashboard();
+
+  try {
+    await syncSchedule(nextTasks);
+    dashboardTaskActionError = '';
+    renderDashboard();
+  } catch (error) {
+    dashboardTaskActionError = `Task changes were saved, but schedule refresh failed: ${error.message}`;
+    renderDashboard();
+  }
+}
+
+/**
+ * Saves a new task list, closes the task editor, re-renders the dashboard,
+ * and triggers a background schedule sync.
+ *
+ * If the sync fails, stores the error message in dashboardTaskActionError so
+ * the health banner can reflect the failure on the next render.
+ *
+ * @param {Array<Object>} nextTasks - The updated task list to save and sync.
+ * @returns {Promise<void>}
+ */
+async function persistTasksAndRefresh(nextTasks) {
+  writeTasks(nextTasks);
+  closeTaskEditor();
+  renderDashboard();
+
+  try {
+    await syncSchedule(nextTasks);
+    dashboardTaskActionError = '';
+    renderDashboard();
+  } catch (error) {
+    dashboardTaskActionError = `Task changes were saved, but schedule refresh failed: ${error.message}`;
+    renderDashboard();
+  }
+}
+
+/**
+ * Renders the 'Now' and 'Next' pulse cards at the top of the dashboard.
+ *
+ * Shows the currently active and next upcoming scheduled segment for today.
+ * Displays a placeholder message if no schedule exists or no segments are active.
+ *
+ * @param {Object|null} schedule - The current schedule object, or null if unavailable.
+ * @param {Array<Object>} todaySegments - Flattened segments scheduled for today, sorted by start time.
+ */
 function renderPulse(schedule, todaySegments) {
   if (!schedule) {
     pulseCards.innerHTML = `
@@ -523,6 +990,17 @@ function renderPulse(schedule, todaySegments) {
     `;
 }
 
+/**
+ * Renders the day timeline view with task blocks and blocked-time overlays.
+ *
+ * Positions each task segment and blocked availability period as absolutely
+ * positioned elements within the timeline container, using pixel offsets
+ * calculated from the hour (6 AM = 0px, each hour = 60px).
+ * Displays a placeholder if no segments are scheduled for the selected day.
+ *
+ * @param {Array<Object>} todaySegments - Flattened segments for the selected timeline day,
+ *   sorted by start time. Each segment must have start and end ISO datetime strings.
+ */
 function renderTodayTimeline(todaySegments) {
   const availability = deriveAvailabilityBlocks();
   const selectedDate = createDayStart(selectedTimelineDate);
@@ -575,6 +1053,18 @@ function renderTodayTimeline(todaySegments) {
   });
 }
 
+/**
+ * Renders the upcoming task queue and incomplete/unscheduled task sections.
+ *
+ * The queue shows the next scheduled segment for each task that is not yet
+ * completed or flagged as incomplete, limited to 5 items by default with a
+ * 'Load All' button for overflow. Incomplete and unscheduled tasks are rendered
+ * separately in a warning section with missing-minutes details.
+ *
+ * @param {Array<Object>|null} schedule - Scheduled task objects from the current schedule.
+ * @param {Array<Object>|null} unscheduled - Unscheduled task objects from the current schedule.
+ * @param {Array<Object>} tasks - The full current task list for status and metadata lookups.
+ */
 function renderQueue(schedule, unscheduled, tasks) {
   if (!schedule && !unscheduled && !tasks.length) {
     queueList.innerHTML = `
@@ -582,28 +1072,64 @@ function renderQueue(schedule, unscheduled, tasks) {
         <p class="text-sm italic text-graphite/55">Generate a schedule to populate the queue.</p>
       </article>
     `;
+    queueLoadAllBtn.classList.add('hidden');
+    unscheduledSection.classList.add('hidden');
+    unscheduledList.innerHTML = '';
     return;
   }
 
-  const scheduledCards = (schedule || []).map((task) => {
-    const firstSegment = task.segments[0];
-    const taskMeta = tasks.find((candidate) => candidate.id === task.id);
-    const isIncomplete = task.completionStatus === 'incomplete' || Number(task.missingMinutes || 0) > 0;
+  const now = new Date();
+  const queuedTasks = (schedule || [])
+    .map((task) => {
+      const taskMeta = tasks.find((candidate) => candidate.id === task.id);
+      const nextSegment = task.segments
+        .filter((segment) => new Date(segment.end) >= now)
+        .sort((a, b) => new Date(a.start) - new Date(b.start))[0];
+      const isIncomplete = task.completionStatus === 'incomplete' || Number(task.missingMinutes || 0) > 0;
+
+      if (!nextSegment || taskMeta?.status === 'completed' || isIncomplete) {
+        return null;
+      }
+
+      return {
+        task,
+        taskMeta,
+        nextSegment
+      };
+    })
+    .filter(Boolean);
+
+  const incompleteTasks = [
+    ...(schedule || [])
+      .filter((task) => task.completionStatus === 'incomplete' || Number(task.missingMinutes || 0) > 0)
+      .map((task) => ({
+        ...task,
+        nextSegment: task.segments
+          .filter((segment) => new Date(segment.end) >= now)
+          .sort((a, b) => new Date(a.start) - new Date(b.start))[0] || null
+      })),
+    ...(unscheduled || []).map((task) => ({
+      ...task,
+      nextSegment: null
+    }))
+  ];
+
+  const visibleQueuedTasks = showAllQueueItems ? queuedTasks : queuedTasks.slice(0, 5);
+  const scheduledCards = visibleQueuedTasks.map(({ task, taskMeta, nextSegment }) => {
     return `
-      <button class="block w-full rounded-[1.5rem] border ${isIncomplete ? 'border-red-200 bg-red-50/60 hover:border-red-300' : 'border-graphite/10 bg-white hover:border-terracotta/20'} p-5 text-left transition" type="button" data-edit-task="${task.id}">
+      <button class="block w-full rounded-[1.5rem] border border-graphite/10 bg-white p-5 text-left transition hover:border-terracotta/20" type="button" data-edit-task="${task.id}">
         <div class="flex items-start justify-between gap-3">
           <h3 class="text-lg font-semibold">${task.title}</h3>
-          <span class="chip ${isIncomplete ? 'bg-white text-red-700' : 'bg-olive/15 text-olive'}">${isIncomplete ? 'Incomplete' : formatStatus(taskMeta?.status || 'new')}</span>
+          <span class="chip bg-olive/15 text-olive">${formatStatus(taskMeta?.status || 'new')}</span>
         </div>
         <p class="mt-3 text-sm text-graphite/60">${task.estimateMinutes} min | Due ${formatDueDate(task.dueDate)}</p>
         <p class="mt-1 text-sm text-graphite/50">${formatLevel(taskMeta?.priority || 'medium')} priority | ${formatLevel(taskMeta?.cognitiveLoad || 'medium')} load</p>
-        <p class="mt-2 text-sm text-graphite/50">${formatRange(firstSegment.start, firstSegment.end)}</p>
-        ${task.missingMinutes ? `<p class="mt-2 text-sm text-red-700">${task.missingMinutes} min still needs space before the deadline.</p>` : ''}
+        <p class="mt-2 text-sm text-graphite/50">${formatQueueTime(nextSegment)}</p>
       </button>
     `;
   });
 
-  const unscheduledCards = (unscheduled || []).map((task) => `
+  const unscheduledCards = incompleteTasks.map((task) => `
     <button class="block w-full rounded-[1.5rem] border border-red-200 bg-red-50 p-5 text-left transition hover:border-red-300" type="button" data-edit-task="${task.id}">
       <div class="flex items-start justify-between gap-3">
         <h3 class="text-lg font-semibold text-red-900">${task.title}</h3>
@@ -611,26 +1137,46 @@ function renderQueue(schedule, unscheduled, tasks) {
       </div>
       <p class="mt-3 text-sm text-red-800">Due ${formatDueDate(task.dueDate)}</p>
       <p class="mt-1 text-sm text-red-700">${formatLevel(task.priority || 'medium')} priority | ${formatLevel(task.cognitiveLoad || 'medium')} load</p>
+      ${task.nextSegment ? `<p class="mt-2 text-sm text-red-700">Next scheduled block: ${formatQueueTime(task.nextSegment)}</p>` : ''}
       <p class="mt-2 text-sm text-red-700">${task.missingMinutes} minutes still need space before the deadline.</p>
+      ${renderUnscheduledReason(task)}
     </button>
   `);
 
-  const completedCards = tasks
-    .filter((task) => task.status === 'completed')
-    .map((task) => `
-      <button class="block w-full rounded-[1.5rem] border border-graphite/10 bg-cream p-5 text-left transition hover:border-graphite/20" type="button" data-edit-task="${task.id}">
-        <div class="flex items-start justify-between gap-3">
-          <h3 class="text-lg font-semibold">${task.title}</h3>
-          <span class="chip bg-white text-graphite/60">Completed</span>
-        </div>
-        <p class="mt-3 text-sm text-graphite/60">Due ${formatDueDate(task.dueDate)}</p>
-        <p class="mt-1 text-sm text-graphite/50">${formatLevel(task.priority || 'medium')} priority | ${formatLevel(task.cognitiveLoad || 'medium')} load</p>
-      </button>
-    `);
+  queueList.innerHTML = scheduledCards.length
+    ? scheduledCards.join('')
+    : `
+      <article class="rounded-[1.5rem] border border-dashed border-graphite/12 bg-cream/75 p-5">
+        <p class="text-sm italic text-graphite/55">No upcoming scheduled tasks in the queue.</p>
+      </article>
+    `;
 
-  queueList.innerHTML = [...scheduledCards, ...unscheduledCards, ...completedCards].join('');
+  if (queuedTasks.length > 5) {
+    queueLoadAllBtn.classList.remove('hidden');
+    queueLoadAllBtn.textContent = showAllQueueItems ? 'Show Less' : `Load All (${queuedTasks.length})`;
+  } else {
+    queueLoadAllBtn.classList.add('hidden');
+  }
+
+  if (unscheduledCards.length) {
+    unscheduledSection.classList.remove('hidden');
+    unscheduledBadge.textContent = String(unscheduledCards.length);
+    unscheduledList.innerHTML = unscheduledCards.join('');
+  } else {
+    unscheduledSection.classList.add('hidden');
+    unscheduledBadge.textContent = '0';
+    unscheduledList.innerHTML = '';
+  }
 }
 
+/**
+ * Renders the 14-day calendar grid with scheduled task segments and availability summaries.
+ *
+ * Each day cell shows open and blocked hours, then lists the task segments scheduled
+ * for that day in chronological order. Days with no segments show a 'No tasks' placeholder.
+ *
+ * @param {Array<Object>|null} schedule - The scheduled task array, or null if unavailable.
+ */
 function renderCalendar(schedule) {
   const segments = flattenScheduled(schedule || []);
   const grouped = new Map();
@@ -690,10 +1236,24 @@ function renderCalendar(schedule) {
   }).join('');
 }
 
+/**
+ * Returns the Monday of the current week as the calendar's default start date.
+ *
+ * Delegates to the shared Planner utility.
+ *
+ * @returns {Date} A Date object set to 00:00 on the most recent Monday.
+ */
 function getCalendarStartMonday() {
   return Planner.getCurrentMonday();
 }
 
+/**
+ * Re-renders all dashboard sections using the latest data from localStorage.
+ *
+ * Reads the current schedule, tasks, and availability, then updates all visible
+ * UI regions: stat counters, pulse cards, health banner, timeline, queue,
+ * calendar, review banner, and the current-time indicator.
+ */
 function renderDashboard() {
   const scheduleData = readSchedule();
   const tasks = readTasks();
@@ -737,6 +1297,16 @@ function renderDashboard() {
   updateTimelineNow();
 }
 
+/**
+ * Returns true if the given element is a text input target.
+ *
+ * Used to prevent keyboard shortcuts from firing when the user is typing
+ * in an input, textarea, or select element.
+ *
+ * @param {EventTarget} target - The event target to check.
+ * @returns {boolean} True if the target is a content-editable element or
+ *   an INPUT, TEXTAREA, or SELECT element.
+ */
 function isTypingTarget(target) {
   return target instanceof HTMLElement
     && (
@@ -745,6 +1315,16 @@ function isTypingTarget(target) {
     );
 }
 
+/**
+ * Shifts the selected timeline date by the given number of days and re-renders.
+ *
+ * Clamps the result to the availability window. Does nothing if the clamped
+ * result is the same as the current date (i.e. already at the boundary).
+ * Resets the auto-scroll flag so the timeline re-scrolls to the current time
+ * when navigating back to today.
+ *
+ * @param {number} delta - Number of days to shift (positive = forward, negative = backward).
+ */
 function shiftTimelineDay(delta) {
   const next = createDayStart(selectedTimelineDate);
   next.setDate(next.getDate() + delta);
@@ -771,12 +1351,30 @@ timelineNextDayBtn.addEventListener('click', () => {
   shiftTimelineDay(1);
 });
 
+/**
+ * Shows or hides the end-of-day review banner based on time, schedule state, and dismissal.
+ *
+ * The banner is shown after 8 PM if the user has work scheduled today and has not
+ * yet dismissed the banner this session. It can also be forced visible via the
+ * developer tools trigger button.
+ *
+ * @param {number} hasTodayWork - The number of segments scheduled for today.
+ *   Treated as a boolean: non-zero means work exists.
+ */
 function updateReviewBanner(hasTodayWork) {
   const dismissed = window.sessionStorage.getItem('architectureReviewBannerDismissed') === 'true';
   const shouldShow = forceReviewBanner || ((new Date().getHours() >= 20) && hasTodayWork && !dismissed);
   reviewBanner.classList.toggle('hidden', !shouldShow);
 }
 
+/**
+ * Renders the day review modal with today's scheduled tasks and editable fields.
+ *
+ * For each task with segments today, displays how many minutes were allocated,
+ * auto-suggests a status update (in_progress if newly started, completed if
+ * fully covered), and provides inputs for extra time, status, priority,
+ * cognitive load, and notes.
+ */
 function renderReviewList() {
   const scheduleData = readSchedule();
   const tasks = readTasks();
@@ -904,15 +1502,7 @@ addTaskBtn.addEventListener('click', async () => {
     ? tasks.map((task) => (task.id === activeTaskId ? { ...task, ...nextTask } : task))
     : [...tasks, nextTask];
 
-  writeTasks(nextTasks);
-
-  try {
-    await syncSchedule(nextTasks);
-    closeTaskEditor();
-    renderDashboard();
-  } catch (error) {
-    quickAddFeedback.textContent = error.message;
-  }
+  await persistTasksAndRefresh(nextTasks);
 });
 
 quickTaskDue.value = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
@@ -933,15 +1523,7 @@ deleteTaskBtn.addEventListener('click', async () => {
   }
 
   const nextTasks = readTasks().filter((task) => task.id !== activeTaskId);
-  writeTasks(nextTasks);
-
-  try {
-    await syncSchedule(nextTasks);
-    closeTaskEditor();
-    renderDashboard();
-  } catch (error) {
-    quickAddFeedback.textContent = error.message;
-  }
+  await persistTasksAndRefresh(nextTasks);
 });
 queueList.addEventListener('click', (event) => {
   const editTarget = event.target.closest('[data-edit-task]');
@@ -953,6 +1535,21 @@ queueList.addEventListener('click', (event) => {
   if (task) {
     openTaskEditor(task);
   }
+});
+unscheduledList.addEventListener('click', (event) => {
+  const editTarget = event.target.closest('[data-edit-task]');
+  if (!editTarget) {
+    return;
+  }
+
+  const task = readTasks().find((item) => item.id === editTarget.dataset.editTask);
+  if (task) {
+    openTaskEditor(task);
+  }
+});
+queueLoadAllBtn.addEventListener('click', () => {
+  showAllQueueItems = !showAllQueueItems;
+  renderDashboard();
 });
 openReviewModalBtn.addEventListener('click', () => {
   renderReviewList();
